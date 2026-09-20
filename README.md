@@ -7,7 +7,7 @@ iEEG Multi-Insitution Neural Decoding Benchmark codebase. Includes preprocessing
 [![Leaderboard](https://img.shields.io/badge/Leaderboard-orange)](https://imindbench.github.io/leaderboard/)
 [![Dataset](https://img.shields.io/badge/Dataset-teal)](https://github.com/neuro-galaxy/torch_brain/tree/gc/add-seeg-movie-watching-datasets)
 
-[Getting started](#getting-started) | [Prepare data](#2-prepare-data) | [Full benchmark](#evaluate-the-complete-benchmark) | [Pretrained weights](#pretrained-weights) | [Customize](#customize) | [Outputs](#outputs) | [Citation](#citation)
+[Getting started](#getting-started) | [Prepare data](#2-prepare-data) | [Full benchmark](#evaluate-the-complete-benchmark) | [Pretrained weights](#pretrained-weights) | [Customize](#customize) | [Outputs](#outputs) | [Changelog](CHANGELOG.md) | [Citation](#citation)
 
 ## Getting started
 
