@@ -16,6 +16,7 @@ from sklearn.metrics import f1_score
 from torch.utils.data import DataLoader
 
 from imindbench.base_runner import BaseRunner
+from imindbench.utils import regression as regression_utils
 from imindbench.utils.logging_utils import log
 
 
@@ -90,6 +91,7 @@ class TorchRunner(BaseRunner):
         val_loader: DataLoader | None = None,
         test_loader: DataLoader | None = None,
         fold_idx=None,
+        regression_targets=None,
     ):
         """
         Train and evaluate a single fold from split DataLoaders.
@@ -100,6 +102,8 @@ class TorchRunner(BaseRunner):
             val_loader: Validation DataLoader
             test_loader: Test DataLoader
             fold_idx: Fold index for the training seed and wandb logging; None uses 0.
+            regression_targets: The fold's RegressionTargets; required when
+                dataset.label_mode is regression, ignored otherwise.
 
         Returns:
             Dictionary with train_accuracy, train_roc_auc, val_accuracy, val_roc_auc, test_accuracy, test_roc_auc
@@ -122,6 +126,16 @@ class TorchRunner(BaseRunner):
         np.random.seed(fold_seed % (2**32))
         torch.manual_seed(fold_seed)  # Seeds CPU and all CUDA devices.
         log(f"[TorchRunner] Training seed: {fold_seed}", priority=0)
+
+        if regression_utils.is_regression(self.cfg):
+            return self._run_fold_regression(
+                model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                test_loader=test_loader,
+                fold_idx=fold_idx,
+                targets=regression_targets,
+            )
 
         classes = self._infer_classes_from_loader(train_loader)
         n_classes = len(classes)
@@ -282,6 +296,381 @@ class TorchRunner(BaseRunner):
                 f"{unknown}. train classes={sorted(class_to_index.keys())}"
             )
         return encoded
+
+    # ---- regression track ---------------------------------------------------
+    # Reached only when dataset.label_mode is regression. The model's output
+    # layer predicts the whole trajectory of a window (traj_len values), so the
+    # model is built with n_classes = traj_len and its output is used directly,
+    # never through a softmax. A window's y is its row in the target table; the
+    # trajectory comes from the fold's RegressionTargets.
+
+    def _run_fold_regression(
+        self,
+        model,
+        *,
+        train_loader,
+        val_loader,
+        test_loader,
+        fold_idx=None,
+        targets=None,
+    ):
+        if targets is None:
+            raise ValueError(
+                "A regression fold needs its RegressionTargets "
+                "(fold['regression_targets'] from the fold builder)."
+            )
+        traj_len = targets.traj_len
+        classes = np.arange(traj_len, dtype=np.int64)  # output size only
+        model.classes_ = classes
+        if model.model is None:
+            try:
+                example_raw = next(iter(train_loader))
+            except StopIteration as exc:
+                raise ValueError(
+                    "train_loader must contain at least one batch."
+                ) from exc
+            example_batch = self._prepare_model_batch(model, example_raw)
+            example_inputs, _, _, _, _ = self._extract_batch_tensors(example_batch)
+            input_shape = tuple(example_inputs.shape[1:])
+            # Every model sizes its output layer from n_classes, so no model
+            # needs its own regression code.
+            model.build_model(input_shape, int(traj_len), device=self.device)
+            model.classes_ = classes
+            _log_model_summary(model, input_shape, int(traj_len))
+
+        head = self.cfg.model.get("regression_head", "trained_mse")
+        if head == "ridge":
+            self._fit_head_ridge_regression(
+                model, train_loader=train_loader, targets=targets
+            )
+        else:
+            self._train_regression(
+                model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                targets=targets,
+                fold_idx=fold_idx,
+            )
+
+        scores = {
+            split: regression_utils.score(
+                *self._evaluate_regression_loader(model, loader, targets)
+            )
+            for split, loader in (
+                ("train", train_loader),
+                ("val", val_loader),
+                ("test", test_loader),
+            )
+        }
+        if self.wandb_run is not None and fold_idx is not None:
+            self.wandb_run.log(
+                {
+                    f"fold_{fold_idx}/{split}_{key}": float(scores[split][key])
+                    for split in scores
+                    for key in ("traj_r", "mean_r")
+                }
+            )
+        torch.cuda.empty_cache()
+        gc.collect()
+        result = self.build_regression_fold_result(scores)
+        result["head"] = head
+        result["target"] = str(targets.target)
+        return result
+
+    def _forward_prepared(self, model, batch_x, batch_coords, batch_seq_id, kwargs):
+        """Forward one prepared batch the same way training batches are run."""
+        return self._forward_model(
+            model.model,
+            batch_x.to(self.device),
+            batch_coords,
+            batch_seq_id,
+            accepts_coords=getattr(model, "accepts_coords", False),
+            model_kwargs=kwargs,
+        )
+
+    def _collect_regression_batch(self, model, raw_batch):
+        """Prepared tensors plus the (recording id, row) of every window."""
+        batch = self._prepare_model_batch(model, raw_batch)
+        batch_x, batch_y, batch_coords, batch_seq_id, kwargs = (
+            self._extract_batch_tensors(batch)
+        )
+        rows = batch_y.detach().cpu().numpy().reshape(-1)
+        recording_ids = [str(rid) for rid in raw_batch["recording_ids"]]
+        return batch_x, batch_coords, batch_seq_id, kwargs, recording_ids, rows
+
+    def _evaluate_regression_loader(self, model, loader, targets):
+        """(predicted trajectories, true trajectories, true means) in loader order."""
+        model.model.eval()
+        preds, trues, means = [], [], []
+        with torch.no_grad():
+            for raw_batch in loader:
+                batch_x, coords, seq_id, kwargs, rids, rows = (
+                    self._collect_regression_batch(model, raw_batch)
+                )
+                outputs = self._forward_prepared(model, batch_x, coords, seq_id, kwargs)
+                preds.append(outputs.float().cpu().numpy())
+                traj, mean = targets.lookup(rids, rows)
+                trues.append(traj)
+                means.append(mean)
+        if not preds:
+            raise ValueError("Cannot evaluate regression on an empty loader.")
+        pred = self._unscale_regression_prediction(model, np.concatenate(preds, axis=0))
+        return pred, np.concatenate(trues, axis=0), np.concatenate(means, axis=0)
+
+    @staticmethod
+    def _unscale_regression_prediction(model, pred):
+        """Undo the train-split target standardization of the trained head."""
+        stats = getattr(model, "_regression_target_stats", None)
+        if stats is None:
+            return pred
+        mu, sd = stats
+        return pred * sd + mu
+
+    def _train_regression(self, model, *, train_loader, val_loader, targets, fold_idx):
+        """Train with mean-squared error; keep the state with the best val traj_r.
+
+        Targets are standardized with the train split's mean and standard
+        deviation so one learning rate works for targets whose units differ by
+        orders of magnitude. Predictions are mapped back before scoring, and
+        Pearson r does not depend on scale.
+
+        The loop follows the classification trainer: epoch_based runs up to
+        model.max_iter epochs with model.patience early stopping (improvement
+        must exceed model.tol), steps_based runs model.total_steps steps and
+        validates every model.validation_interval steps. The selection warm-up
+        keys apply the same way.
+        """
+        rows_all, rids_all = [], []
+        for raw_batch in train_loader:
+            rows_all.append(np.asarray(raw_batch["y"]).reshape(-1))
+            rids_all.extend(str(rid) for rid in raw_batch["recording_ids"])
+        train_traj, _ = targets.lookup(rids_all, np.concatenate(rows_all))
+        mu = float(train_traj.mean())
+        sd = float(train_traj.std())
+        sd = sd if sd > 1e-12 else 1.0
+        model._regression_target_stats = (mu, sd)
+
+        criterion = nn.MSELoss()
+        training_mode = self.cfg.model.get("training_mode", "epoch_based")
+        max_iter = int(self.cfg.model.get("max_iter", 100))
+        total_steps = int(self.cfg.model.get("total_steps", 2000))
+        optimizer, scheduler, _ = self._create_optimizer_and_scheduler(
+            model,
+            total_steps_override=(
+                total_steps
+                if training_mode == "steps_based"
+                else max_iter * len(train_loader)
+            ),
+        )
+        fold_label = f"Fold {fold_idx}" if fold_idx is not None else "Fold"
+        best = {"score": float("-inf"), "state": None}
+
+        def train_step(raw_batch):
+            model.model.train()
+            batch_x, coords, seq_id, kwargs, rids, rows = (
+                self._collect_regression_batch(model, raw_batch)
+            )
+            traj, _ = targets.lookup(rids, rows)
+            target = torch.as_tensor(
+                (traj - mu) / sd, dtype=torch.float32, device=self.device
+            )
+            optimizer.zero_grad()
+            outputs = self._forward_prepared(model, batch_x, coords, seq_id, kwargs)
+            loss = criterion(outputs.float(), target)
+            loss.backward()
+            grad_clip = self.cfg.model.get("grad_clip", None)
+            if grad_clip:
+                torch.nn.utils.clip_grad_norm_(model.model.parameters(), grad_clip)
+            optimizer.step()
+            self._apply_model_constraints(model)
+            if scheduler is not None:
+                scheduler.step(loss.item())
+            return float(loss.item())
+
+        def validate(progress, *, tol, in_warmup):
+            scores = regression_utils.score(
+                *self._evaluate_regression_loader(model, val_loader, targets)
+            )
+            log(
+                f"{fold_label}: {progress} val_traj_r={scores['traj_r']:.4f} "
+                f"val_mean_r={scores['mean_r']:.4f}",
+                priority=0,
+            )
+            if in_warmup:
+                return None
+            improved = self._selection_improved(
+                scores["traj_r"], best["score"], tol=tol
+            )
+            if improved:
+                best["score"] = scores["traj_r"]
+                best["state"] = {
+                    k: v.detach().cpu().clone()
+                    for k, v in model.model.state_dict().items()
+                }
+            return improved
+
+        if training_mode == "steps_based":
+            validation_interval = int(self.cfg.model.get("validation_interval", 100))
+            warmup_steps = int(self.cfg.model.get("selection_warmup_steps", 0))
+            step = 0
+            train_iter = iter(train_loader)
+            while step < total_steps:
+                try:
+                    raw_batch = next(train_iter)
+                except StopIteration:
+                    train_iter = iter(train_loader)
+                    raw_batch = next(train_iter)
+                loss = train_step(raw_batch)
+                step += 1
+                if step % validation_interval == 0 or step == total_steps:
+                    validate(
+                        f"train_step={step}/{total_steps} train_mse={loss:.4f}",
+                        tol=0.0,
+                        in_warmup=step < warmup_steps,
+                    )
+        else:
+            patience = int(self.cfg.model.get("patience", 10))
+            tol = float(self.cfg.model.get("tol", 1e-4))
+            warmup_epochs = int(self.cfg.model.get("selection_warmup_epochs", 0))
+            bad_epochs = 0
+            for epoch in range(max_iter):
+                losses = [train_step(raw_batch) for raw_batch in train_loader]
+                improved = validate(
+                    f"train_epoch={epoch + 1}/{max_iter} "
+                    f"train_mse={float(np.mean(losses)):.4f}",
+                    tol=tol,
+                    in_warmup=epoch < warmup_epochs,
+                )
+                if improved is None:
+                    continue
+                bad_epochs = 0 if improved else bad_epochs + 1
+                if bad_epochs >= patience:
+                    log(
+                        f"{fold_label}: early stop at epoch {epoch + 1} "
+                        f"(best val_traj_r={best['score']:.4f})",
+                        priority=0,
+                    )
+                    break
+        if best["state"] is not None:
+            model.model.load_state_dict(best["state"])
+        return model
+
+    def _probe_head_linear(self, model):
+        """The final linear layer that the ridge head solves for."""
+        core = getattr(model.model, "ft_core_model", None)
+        if core is not None:
+            # DIVER flatten_linear: the head Linear is wrapped once.
+            linear = getattr(core, "module", core)
+        else:
+            linear = None
+            for module in model.model.modules():
+                if isinstance(module, nn.Linear):
+                    linear = module
+        if not isinstance(linear, nn.Linear):
+            raise ValueError(
+                "model.regression_head='ridge' needs a final nn.Linear, got "
+                f"{type(linear).__name__}."
+            )
+        return linear
+
+    def _collect_probe_features(self, model, loader, linear):
+        """Run a split through the model and capture the input of ``linear``.
+
+        Returns (features (n, D), rows (n,), recording id per row).
+        """
+        feats, rows, rids = [], [], []
+        captured = {}
+
+        def hook(_module, inputs, _output):
+            x = inputs[0].detach()
+            captured["x"] = x.reshape(x.shape[0], -1)
+
+        handle = linear.register_forward_hook(hook)
+        model.model.eval()
+        try:
+            with torch.no_grad():
+                for raw_batch in loader:
+                    batch_x, coords, seq_id, kwargs, batch_rids, batch_rows = (
+                        self._collect_regression_batch(model, raw_batch)
+                    )
+                    self._forward_prepared(model, batch_x, coords, seq_id, kwargs)
+                    feats.append(captured["x"].float().cpu())
+                    rows.append(np.asarray(batch_rows).reshape(-1))
+                    rids.extend(batch_rids)
+        finally:
+            handle.remove()
+        return torch.cat(feats), np.concatenate(rows), rids
+
+    def _fit_head_ridge_regression(self, model, *, train_loader, targets):
+        """Solve the final linear layer in closed form with ridge regression.
+
+        The rest of the model stays as loaded. Features X (the input of the
+        final layer) and targets Y (the train trajectories) are centred, and the
+        weights come from the dual form W = X^T (X X^T + lambda I)^-1 Y, which
+        is an N x N solve whatever the feature size. The bias absorbs the means.
+        """
+        linear = self._probe_head_linear(model)
+        X, rows, rids = self._collect_probe_features(model, train_loader, linear)
+        X = X.double()
+        Y_np, _ = targets.lookup(rids, rows)
+        Y = torch.as_tensor(Y_np, dtype=torch.float64)
+        X_mean, Y_mean = X.mean(0, keepdim=True), Y.mean(0, keepdim=True)
+        Xc, Yc = X - X_mean, Y - Y_mean
+        n = Xc.shape[0]
+        gram = Xc @ Xc.T
+        lam, mode, trace_over_n = self._resolve_head_lambda(gram, Yc, n)
+        system = gram.clone()
+        system.diagonal().add_(lam)
+        Z = torch.linalg.solve(system, Yc)
+        W = (Xc.T @ Z).T  # (traj_len, D)
+        b = Y_mean.reshape(-1) - W @ X_mean.reshape(-1)
+        with torch.no_grad():
+            linear.weight.copy_(W.to(linear.weight.dtype).to(linear.weight.device))
+            linear.bias.copy_(b.to(linear.bias.dtype).to(linear.bias.device))
+        # The closed form predicts in the target's own units.
+        model._regression_target_stats = None
+        log(
+            f"Ridge regression head: N={n} D={Xc.shape[1]} L={Y.shape[1]} "
+            f"lambda_mode={mode} lambda={lam:.6g} trace/N={trace_over_n:.6g}",
+            priority=0,
+        )
+        return model
+
+    def _resolve_head_lambda(self, gram, Yc, n):
+        """The ridge strength: (lambda, mode, trace(gram) / N).
+
+        fixed: model.regression_head_lambda.
+        trace: model.regression_head_lambda_alpha * trace(gram) / N, so the
+            shrinkage is the same relative to the feature scale in every cell.
+        gcv: the value in model.regression_head_lambda_grid with the lowest
+            generalized cross-validation error.
+        """
+        model_cfg = self.cfg.model
+        lam = float(model_cfg.get("regression_head_lambda", 1.0))
+        mode = str(model_cfg.get("regression_head_lambda_mode", "fixed"))
+        trace_over_n = float(gram.diagonal().sum()) / n
+        if mode == "trace":
+            lam = (
+                float(model_cfg.get("regression_head_lambda_alpha", 1.0)) * trace_over_n
+            )
+        elif mode == "gcv":
+            grid = [
+                float(v)
+                for v in model_cfg.get(
+                    "regression_head_lambda_grid", [3e3, 1e4, 3e4, 1e5, 3e5]
+                )
+            ]
+            eigvals, eigvecs = torch.linalg.eigh(gram)
+            Yt = eigvecs.T @ Yc
+            best = None
+            for candidate in grid:
+                hat = eigvals / (eigvals + candidate)
+                residual = (((1.0 - hat)[:, None] * Yt) ** 2).sum()
+                gcv = float(residual / max((n - float(hat.sum())) ** 2, 1e-12))
+                if best is None or gcv < best[0]:
+                    best = (gcv, candidate)
+            lam = best[1]
+        return lam, mode, trace_over_n
 
     def _prepare_model_batch(
         self,

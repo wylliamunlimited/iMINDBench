@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 
 from imindbench.models import build_model
 from imindbench.torch_runner import TorchRunner
+from imindbench.utils import regression as regression_utils
 from imindbench.utils.collate import variable_channel_collate
 from imindbench.utils.data_adapter import (
     MatchedSubsetAbsent,
@@ -91,10 +92,18 @@ def _attach_dataset_cfg(model, dataset_cfg):
     return model
 
 
-def collect_numpy_from_loader(loader, *, model=None, runner_cfg=None):
-    """Collect one split DataLoader into numpy arrays."""
+def collect_numpy_from_loader(
+    loader, *, model=None, runner_cfg=None, return_recording_ids=False
+):
+    """Collect one split DataLoader into numpy arrays.
+
+    Returns (X, y), or (X, y, recording_ids) when return_recording_ids is set.
+    Regression folds need the recording ids because their targets are looked
+    up by (recording id, row).
+    """
     xs = []
     ys = []
+    recording_ids: list[str] = []
     expected_feature_shape = None
     for batch_idx, raw_batch in enumerate(loader):
         batch = raw_batch
@@ -134,11 +143,17 @@ def collect_numpy_from_loader(loader, *, model=None, runner_cfg=None):
             )
         xs.append(x)
         ys.append(y)
+        if return_recording_ids:
+            recording_ids.extend(str(rid) for rid in raw_batch["recording_ids"])
 
     if not xs:
-        return np.zeros((0, 0), dtype=np.float32), np.array([], dtype=np.int32)
-    X = np.concatenate(xs, axis=0)
-    y = np.concatenate(ys, axis=0).astype(np.int32, copy=False)
+        X = np.zeros((0, 0), dtype=np.float32)
+        y = np.array([], dtype=np.int32)
+    else:
+        X = np.concatenate(xs, axis=0)
+        y = np.concatenate(ys, axis=0).astype(np.int32, copy=False)
+    if return_recording_ids:
+        return X, y, recording_ids
     return X, y
 
 
@@ -435,6 +450,56 @@ def iter_variable_channel_folds(
         }
 
 
+def _evaluate_regression_fold(fold_idx, fold, *, cfg, runner, loaders):
+    """Score one regression fold with the sklearn or torch runner."""
+    train_loader, val_loader, test_loader = loaders
+    targets = fold["regression_targets"]
+    fold_model = _attach_dataset_cfg(build_model(cfg.model), cfg.dataset)
+    if cfg.model.backend == "sklearn":
+        runner_cfg = {
+            "coord_index_policy": cfg.get("runner", {}).get(
+                "coord_index_policy", "round_clamp"
+            )
+        }
+        arrays = {
+            split: collect_numpy_from_loader(
+                loader,
+                model=fold_model,
+                runner_cfg=runner_cfg,
+                return_recording_ids=True,
+            )
+            for split, loader in (
+                ("train", train_loader),
+                ("val", val_loader),
+                ("test", test_loader),
+            )
+        }
+        fold_result = runner.run_fold_regression(
+            arrays["train"][0],
+            arrays["train"][1],
+            arrays["test"][0],
+            arrays["test"][1],
+            X_val=arrays["val"][0],
+            y_val=arrays["val"][1],
+            recording_ids={split: arrays[split][2] for split in arrays},
+            targets=targets,
+        )
+    else:
+        if not isinstance(runner, TorchRunner):
+            raise NotImplementedError("model.backend=torch requires TorchRunner.")
+        fold_result = runner.run_fold(
+            fold_model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            test_loader=test_loader,
+            fold_idx=fold_idx,
+            regression_targets=targets,
+        )
+    del fold_model, fold
+    gc.collect()
+    return fold_result
+
+
 def evaluate_variable_fold(
     fold_idx,
     fold_payload,
@@ -460,6 +525,16 @@ def evaluate_variable_fold(
         cfg,
         seed=seed + fold_idx,
     )
+    if regression_utils.is_regression(cfg):
+        # A regression window's y is its row in the target table, so the
+        # class-coverage checks below do not apply.
+        return _evaluate_regression_fold(
+            fold_idx,
+            fold,
+            cfg=cfg,
+            runner=runner,
+            loaders=(train_loader, val_loader, test_loader),
+        )
     train_class_counts = collect_class_counts_from_loader(train_loader)
     val_class_counts = collect_class_counts_from_loader(val_loader)
     test_class_counts = collect_class_counts_from_loader(test_loader)

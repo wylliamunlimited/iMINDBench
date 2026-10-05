@@ -14,9 +14,16 @@ brainsets/datasets/MillerECoG2019.py):
 - ``num_folds_for_regime("within-session")`` returns 2
 - ``class_pair=(a, b)`` keeps only windows of stored labels a and b and
   relabels them 0 / 1 with b as class 1
+- in ``label_mode="regression"`` each window's label is its row in the
+  recording's target table, and ``get_regression_targets`` returns
+  ``{"traj": (n_rows, traj_len), "mean": (n_rows,)}`` with the target
+  sampled at 40 Hz inside each window
 
-The signal is synthetic: channel 0 carries a sine wave whose amplitude
-depends on the window's label, so a simple model can separate the classes.
+The signal is synthetic. For classification, channel 0 carries a sine wave
+whose amplitude depends on the window's label, so a simple model can separate
+the classes. For regression, channel 0 is a smooth continuous target, and the
+trajectory of a window is that target's 40 Hz block means, so a linear model
+can predict it.
 """
 
 from __future__ import annotations
@@ -92,7 +99,9 @@ class FakeMillerECoG2019:
     sampling_rate_hz = 100.0
     n_channels = 4
     windows_per_class = 12
+    regression_windows = 80
     window_sec = 0.5
+    traj_hz = 40.0
     # Set to True by tests that need the build with MNI152 positions.
     with_positions = False
 
@@ -152,15 +161,54 @@ class FakeMillerECoG2019:
     def n_classes(self) -> int:
         return 3 if self.label_mode == "multiclass" else 2
 
+    @property
+    def is_regression(self) -> bool:
+        return self.label_mode == "regression"
+
+    @property
+    def n_windows(self) -> int:
+        if self.is_regression:
+            return self.regression_windows
+        return self.n_classes * self.windows_per_class
+
+    @property
+    def traj_len(self) -> int:
+        return int(round(self.window_sec * self.traj_hz))
+
     def _all_windows(self) -> tuple[np.ndarray, np.ndarray]:
-        n = self.n_classes * self.windows_per_class
+        n = self.n_windows
         starts = 0.1 + np.arange(n, dtype=np.float64) * (self.window_sec + 0.1)
+        if self.is_regression:
+            return starts, np.arange(n, dtype=np.int64)  # row index
         labels = np.arange(n, dtype=np.int64) % self.n_classes
         return starts, labels
 
+    def _continuous_target(self, t: np.ndarray) -> np.ndarray:
+        return (
+            np.sin(2 * np.pi * 0.37 * t)
+            + 0.6 * np.sin(2 * np.pi * 1.3 * t + 1.0)
+            + 0.3 * np.sin(2 * np.pi * 2.9 * t + 2.0)
+        )
+
+    def get_regression_targets(self, recording_id: str) -> dict[str, np.ndarray]:
+        assert recording_id in self.recording_ids
+        if not self.is_regression:
+            raise ValueError("get_regression_targets needs label_mode='regression'.")
+        starts, _ = self._all_windows()
+        # Mean of the target over each 1/40 s bin, from 10 points per bin.
+        offsets = (np.arange(self.traj_len * 10) + 0.5) / (self.traj_hz * 10)
+        traj = [
+            self._continuous_target(start + offsets)
+            .reshape(self.traj_len, 10)
+            .mean(axis=1)
+            for start in starts
+        ]
+        traj = np.asarray(traj, dtype=np.float32) * 1000.0  # large raw units
+        return {"traj": traj, "mean": traj.mean(axis=1)}
+
     def _split_positions(self) -> np.ndarray:
         """Two chronological folds: the test half, its first half as val."""
-        n = self.n_classes * self.windows_per_class
+        n = self.n_windows
         first, second = np.arange(n // 2), np.arange(n // 2, n)
         held_out = second if self.fold == 0 else first
         train = first if self.fold == 0 else second
@@ -191,7 +239,12 @@ class FakeMillerECoG2019:
         t = np.arange(n_samples) / self.sampling_rate_hz
         rng = np.random.default_rng(subject_number_for(self.subject_code))
         signal = 0.1 * rng.standard_normal((n_samples, self.n_channels))
+        if self.is_regression:
+            signal[:, 0] += self._continuous_target(t)
+            labels = np.zeros_like(labels)
         for start, label in zip(starts, labels, strict=True):
+            if self.is_regression:
+                break
             inside = (t >= start) & (t < start + self.window_sec)
             signal[inside, 0] += (1.0 + 2.0 * label) * np.sin(
                 2 * np.pi * 10 * t[inside]

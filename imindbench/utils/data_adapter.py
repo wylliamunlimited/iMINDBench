@@ -25,6 +25,7 @@ import torch
 from omegaconf import OmegaConf
 
 from imindbench.preprocessors import build_preprocessor, describe_preprocessor
+from imindbench.utils import regression as regression_utils
 from imindbench.utils.logging_utils import log, log_fold_split_sample_counts
 from imindbench.utils.pipeline_contracts import (
     AUTO_MAX_TRAIN_SAMPLES_PER_SUBJECT,
@@ -2771,6 +2772,44 @@ class WindowedNeuroprobeSplitDataset(torch.utils.data.Dataset):
         return sample
 
 
+def _build_regression_targets(
+    dataset_cfg: Any,
+    *,
+    split_providers: dict[str, Any],
+    dataset_provider: str,
+    fold_idx: int,
+) -> regression_utils.RegressionTargets | None:
+    """Collect the continuous targets of every recording in this fold.
+
+    In regression mode a window's y is its row in its recording's target
+    table. The tables are read once per fold from the dataset class and kept
+    next to the splits, so they never pass through preprocessing or the caches.
+    Returns None for binary and multiclass runs.
+    """
+    if not regression_utils.is_regression(dataset_cfg):
+        return None
+    out_last = _dataset_cfg_get(dataset_cfg, "regression_target_last_samples", 0)
+    targets = regression_utils.RegressionTargets(
+        str(dataset_cfg.task), out_last=int(out_last or 0)
+    )
+    for split_provider in split_providers.values():
+        getter = getattr(split_provider, "get_regression_targets", None)
+        if getter is None:
+            raise TypeError(
+                "dataset.label_mode='regression' needs a dataset class with "
+                f"get_regression_targets(); '{dataset_provider}' has none."
+            )
+        for recording_id in split_provider.recording_ids:
+            payload = getter(recording_id)
+            targets.add(recording_id, traj=payload["traj"], mean=payload["mean"])
+    log(
+        f"Fold {fold_idx}: regression targets for '{dataset_cfg.task}' have "
+        f"{targets.traj_len} samples per window",
+        priority=0,
+    )
+    return targets
+
+
 _MATCHED_SUBSET_FILES: dict[str, Any] = {}
 
 
@@ -2987,6 +3026,12 @@ def build_neuroprobe_torch_fold(
             regime=regime,
         )
         split_ctor_seconds[split] = time.time() - split_ctor_start
+    regression_targets = _build_regression_targets(
+        dataset_cfg,
+        split_providers=split_providers,
+        dataset_provider=str(dataset_provider),
+        fold_idx=fold_idx,
+    )
     if not uses_train_sources:
         split_providers["train"] = _apply_decodable_train_recording_filter(
             split_providers["train"],
@@ -3768,6 +3813,8 @@ def build_neuroprobe_torch_fold(
         "test_split": split_datasets["test"],
         "preprocess_state": preprocess_state,
         "metadata": metadata,
+        # RegressionTargets when dataset.label_mode is regression, else None.
+        "regression_targets": regression_targets,
     }
     validate_fold_dict(fold)
     return fold
