@@ -1,4 +1,7 @@
-"""Options that change what a Miller cell scores: class pairs."""
+"""Options that change what a Miller cell scores.
+
+Class pairs, fold subsets and matched train subsets.
+"""
 
 import numpy as np
 import pytest
@@ -192,3 +195,182 @@ def test_result_config_records_label_mode_and_class_pair():
     config = _public_config(_cfg(label_mode="multiclass", class_pair=[0, 2]).dataset)
     assert config["label_mode"] == "multiclass"
     assert config["class_pair"] == [0, 2]
+
+
+# ---- fold_subset ------------------------------------------------------------
+
+
+def _iter_folds(tmp_path, fold_subset, **dataset_overrides):
+    from imindbench.utils.fold_helpers import iter_variable_channel_folds
+
+    preprocessor_cfg = OmegaConf.create({"chain": [{"name": "raw"}]})
+    return list(
+        iter_variable_channel_folds(
+            n_folds=2,
+            dataset_cfg=_cfg(root=str(tmp_path), **dataset_overrides).dataset,
+            preprocessor=build_preprocessor(preprocessor_cfg),
+            preprocessor_cfg=preprocessor_cfg,
+            seed=0,
+            require_coords=False,
+            needs_pool=False,
+            fold_subset=fold_subset,
+        )
+    )
+
+
+@pytest.mark.parametrize(("fold_subset", "expected"), [(None, [0, 1]), ([1], [1])])
+def test_fold_subset_runs_only_the_listed_folds(
+    tmp_path, fake_miller, fold_subset, expected
+):
+    folds = _iter_folds(tmp_path, fold_subset)
+    assert [fold["fold_idx"] for fold in folds] == expected
+
+
+def test_fold_subset_outside_the_fold_count_is_rejected(tmp_path, fake_miller):
+    with pytest.raises(ValueError, match="outside 0..1"):
+        _iter_folds(tmp_path, [2])
+
+
+@pytest.mark.parametrize(
+    ("value", "error", "message"),
+    [
+        ([], ValueError, "non-empty list"),
+        (0, ValueError, "non-empty list"),
+        ([0, 0], ValueError, "repeat"),
+        ([-1], ValueError, ">= 0"),
+        ([True], TypeError, "ints"),
+    ],
+)
+def test_bad_fold_subsets_are_rejected(value, error, message):
+    with pytest.raises(error, match=message):
+        validate_eval_config(_cfg(fold_subset=value))
+
+
+def test_fold_subset_is_accepted_and_recorded():
+    cfg = _cfg(fold_subset=[0])
+    validate_eval_config(cfg)
+    assert resolve_task_mode_config(cfg.dataset) == {"fold_subset": [0]}
+
+
+# ---- matched train subsets --------------------------------------------------
+
+
+def _train_labels(tmp_path, fold_idx=0):
+    fold = _build_fold(tmp_path)
+    assert fold_idx == 0
+    return [int(sample["y"]) for sample in fold["train_split"]]
+
+
+def _loader_order(n, seed):
+    import torch
+
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+    order = None
+    for op in "ppbpbbp":
+        if op == "b":
+            torch.empty((), dtype=torch.int64).random_(generator=generator)
+        else:
+            order = torch.randperm(n, generator=generator).tolist()
+    return order
+
+
+def _write_subset_file(tmp_path, labels, *, positions, crc_labels=None, draws=("0",)):
+    import json
+    import zlib
+
+    crc_labels = labels if crc_labels is None else crc_labels
+    table = {
+        "move_vs_rest_sub3_sess1_fold0": {
+            "n_train": len(labels),
+            "y_train_crc32": zlib.crc32(json.dumps(crc_labels).encode()),
+            "subsets": {"0.25": {draw: positions for draw in draws}},
+        }
+    }
+    path = tmp_path / "subsets.json"
+    path.write_text(json.dumps(table))
+    data_adapter._MATCHED_SUBSET_FILES.clear()
+    return str(path)
+
+
+def _matched(path, draw=0):
+    return {
+        "train_sample_indices_file": path,
+        "train_sample_indices_frac": 0.25,
+        "train_sample_indices_draw": draw,
+        "train_sample_indices_order_seed": 42,
+    }
+
+
+def test_matched_subset_keeps_the_listed_windows(tmp_path, fake_miller):
+    labels = _train_labels(tmp_path)
+    path = _write_subset_file(tmp_path, labels, positions=[0, 3, 5])
+    fold = _build_fold(tmp_path, **_matched(path))
+    kept = [int(sample["y"]) for sample in fold["train_split"]]
+    assert kept == [labels[0], labels[3], labels[5]]
+    # val and test are not subsampled.
+    assert len(fold["test_split"]) == len(_build_fold(tmp_path)["test_split"])
+
+
+def test_matched_subset_in_train_loader_order(tmp_path, fake_miller):
+    labels = _train_labels(tmp_path)
+    order = _loader_order(len(labels), 42 + 0)
+    path = _write_subset_file(
+        tmp_path,
+        labels,
+        positions=[0, 1],
+        crc_labels=[labels[j] for j in order],
+    )
+    fold = _build_fold(tmp_path, **_matched(path))
+    kept = [int(sample["y"]) for sample in fold["train_split"]]
+    assert kept == [labels[j] for j in sorted(order[:2])]
+
+
+def test_matched_subset_with_wrong_checksum_stops_the_run(tmp_path, fake_miller):
+    labels = _train_labels(tmp_path)
+    wrong = [1 - label for label in labels]
+    path = _write_subset_file(tmp_path, labels, positions=[0], crc_labels=wrong)
+    with pytest.raises(ValueError, match="checksum does not match"):
+        _build_fold(tmp_path, **_matched(path))
+
+
+def test_absent_matched_subset_is_recorded_as_a_skipped_fold(tmp_path, fake_miller):
+    from imindbench.utils.fold_helpers import evaluate_variable_fold
+
+    labels = _train_labels(tmp_path)
+    path = _write_subset_file(tmp_path, labels, positions=[0], draws=("1",))
+    with pytest.raises(data_adapter.MatchedSubsetAbsent):
+        _build_fold(tmp_path, **_matched(path, draw=0))
+    payloads = _iter_folds(tmp_path, [0], **_matched(path, draw=0))
+    assert payloads[0]["fold"] is None
+    result = evaluate_variable_fold(0, payloads[0], cfg=None, runner=None, seed=0)
+    assert result["status"] == "skipped"
+    assert "absent" in result["skip_reason"]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"train_sample_indices_file": "x.json"}, "needs"),
+        ({"train_sample_indices_draw": 0}, "need dataset.train_sample_indices_file"),
+        ({**_matched("x.json"), "train_sample_fraction": 0.5}, "train_sample_fraction"),
+        (
+            {**_matched("x.json"), "max_train_samples_per_subject": 10},
+            "max_train_samples_per_subject",
+        ),
+        ({**_matched("x.json"), "train_sample_indices_draw": -1}, "int >= 0"),
+    ],
+)
+def test_bad_matched_subset_options_are_rejected(overrides, message):
+    with pytest.raises(ValueError, match=message):
+        validate_eval_config(_cfg(**overrides))
+
+
+def test_matched_subset_changes_the_cache_id_and_result_config():
+    cfg = _cfg(**_matched("x.json"))
+    validate_eval_config(cfg)
+    identity = data_adapter._optional_task_mode_identity(cfg.dataset)
+    assert identity == {"train_sample_indices": ["x.json", "0.25", "0", "42"]}
+    assert resolve_task_mode_config(cfg.dataset) == {
+        "train_sample_indices": {"frac": "0.25", "draw": 0}
+    }

@@ -15,7 +15,10 @@ from torch.utils.data import DataLoader
 from imindbench.models import build_model
 from imindbench.torch_runner import TorchRunner
 from imindbench.utils.collate import variable_channel_collate
-from imindbench.utils.data_adapter import build_neuroprobe_torch_fold
+from imindbench.utils.data_adapter import (
+    MatchedSubsetAbsent,
+    build_neuroprobe_torch_fold,
+)
 from imindbench.utils.logging_utils import (
     DEFAULT_RESULTS_TIME_BIN,
     log,
@@ -368,10 +371,27 @@ def iter_variable_channel_folds(
     preprocessed_split_cache_enabled: bool = False,
     preprocessed_split_cache_dir=None,
     preprocessed_split_cache_mode: str = "read_write",
+    fold_subset=None,
 ):
-    """Yield prepared variable-channel fold payloads with timing metadata."""
+    """Yield prepared variable-channel fold payloads with timing metadata.
+
+    fold_subset (dataset.fold_subset) limits the run to the listed folds; None
+    runs every fold. A fold whose matched train subset is absent from the
+    subset file is yielded with fold=None and a skip_reason, and is recorded
+    as skipped.
+    """
     thread_cap = _normalize_preprocess_torch_num_threads(preprocess_torch_num_threads)
-    for fold_idx in range(n_folds):
+    if fold_subset is None:
+        fold_ids = list(range(n_folds))
+    else:
+        fold_ids = [int(fold_idx) for fold_idx in fold_subset]
+        outside = [fold_idx for fold_idx in fold_ids if not 0 <= fold_idx < n_folds]
+        if outside:
+            raise ValueError(
+                f"dataset.fold_subset {fold_ids} lists folds outside 0..{n_folds - 1}."
+            )
+        log(f"dataset.fold_subset={fold_ids}: running only these folds", priority=0)
+    for fold_idx in fold_ids:
         fold_prepare_start = time.time()
         with _temporary_torch_num_threads(thread_cap) as original_threads:
             if (
@@ -384,21 +404,30 @@ def iter_variable_channel_folds(
                     f"to {thread_cap} (was {original_threads})",
                     priority=0,
                 )
-            fold = build_neuroprobe_torch_fold(
-                dataset_cfg,
-                preprocessor,
-                preprocessor_cfg=preprocessor_cfg,
-                paths_cfg=paths_cfg,
-                fold_idx=fold_idx,
-                seed=seed + fold_idx,
-                require_coords=require_coords,
-                needs_pool=needs_pool,
-                train_source_cache_enabled=train_source_cache_enabled,
-                train_source_cache_dir=train_source_cache_dir,
-                preprocessed_split_cache_enabled=preprocessed_split_cache_enabled,
-                preprocessed_split_cache_dir=preprocessed_split_cache_dir,
-                preprocessed_split_cache_mode=preprocessed_split_cache_mode,
-            )
+            try:
+                fold = build_neuroprobe_torch_fold(
+                    dataset_cfg,
+                    preprocessor,
+                    preprocessor_cfg=preprocessor_cfg,
+                    paths_cfg=paths_cfg,
+                    fold_idx=fold_idx,
+                    seed=seed + fold_idx,
+                    require_coords=require_coords,
+                    needs_pool=needs_pool,
+                    train_source_cache_enabled=train_source_cache_enabled,
+                    train_source_cache_dir=train_source_cache_dir,
+                    preprocessed_split_cache_enabled=preprocessed_split_cache_enabled,
+                    preprocessed_split_cache_dir=preprocessed_split_cache_dir,
+                    preprocessed_split_cache_mode=preprocessed_split_cache_mode,
+                )
+            except MatchedSubsetAbsent as exc:
+                yield {
+                    "fold_idx": fold_idx,
+                    "prepare_seconds": time.time() - fold_prepare_start,
+                    "fold": None,
+                    "skip_reason": str(exc),
+                }
+                continue
         yield {
             "fold_idx": fold_idx,
             "prepare_seconds": time.time() - fold_prepare_start,
@@ -416,6 +445,16 @@ def evaluate_variable_fold(
 ):
     """Evaluate one prepared fold and return fold metrics."""
     fold = fold_payload["fold"]
+    if fold is None:
+        # iter_variable_channel_folds found no matched train subset.
+        return build_skipped_fold_result(
+            reason=fold_payload["skip_reason"],
+            insufficient_splits=["train"],
+            train_class_counts={},
+            val_class_counts={},
+            test_class_counts={},
+            include_val_metrics=False,
+        )
     train_loader, val_loader, test_loader = build_torch_split_loaders(
         fold,
         cfg,

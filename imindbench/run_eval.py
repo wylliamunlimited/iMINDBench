@@ -223,6 +223,7 @@ def _run_processed_evaluation(
                 preprocessed_split_cache_mode=cfg.runtime.get(
                     "preprocessed_split_cache_mode", "read_write"
                 ),
+                fold_subset=dataset_cfg.get("fold_subset", None),
             ),
             evaluate_fold=partial(
                 fold_helpers.evaluate_variable_fold,

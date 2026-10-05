@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import uuid
+import zlib
 from collections.abc import Iterable
 from copy import deepcopy
 from pathlib import Path
@@ -489,6 +490,14 @@ def _optional_task_mode_identity(dataset_cfg: Any) -> dict[str, Any]:
     class_pair = _dataset_cfg_get(dataset_cfg, "class_pair", None)
     if class_pair is not None:
         identity["class_pair"] = [int(label) for label in class_pair]
+    indices_file = _dataset_cfg_get(dataset_cfg, "train_sample_indices_file", None)
+    if indices_file:
+        identity["train_sample_indices"] = [
+            str(indices_file),
+            str(_dataset_cfg_get(dataset_cfg, "train_sample_indices_frac", None)),
+            str(_dataset_cfg_get(dataset_cfg, "train_sample_indices_draw", None)),
+            str(_dataset_cfg_get(dataset_cfg, "train_sample_indices_order_seed", None)),
+        ]
     return identity
 
 
@@ -1093,6 +1102,8 @@ def _clone_train_dataset_with_subject_cap(
     cloned._brain_area_key = dataset._brain_area_key
     cloned._sample_fraction = dataset._sample_fraction
     cloned._sample_seed = dataset._sample_seed
+    # Matched subsets cannot be combined with a subject cap.
+    cloned._sample_indices = None
     cloned._materialized = None
     cloned._selection = deepcopy(dataset._selection)
     cloned._dataset_provider = dataset._dataset_provider
@@ -2011,9 +2022,11 @@ class WindowedNeuroprobeSplitDataset(torch.utils.data.Dataset):
         max_samples_per_subject: int | None = None,
         sample_fraction: float = 1.0,
         sample_seed: int | None = None,
+        sample_indices: dict[str, Any] | None = None,
     ):
         self.provider = provider
         self.provider_key = _validate_provider_key(provider_key)
+        self._sample_indices = sample_indices
         self.split = split
         self.coordinate_profile = resolve_coordinate_profile(coordinate_profile)
         validate_window_slicing_policy(window_slicing_policy)
@@ -2160,6 +2173,8 @@ class WindowedNeuroprobeSplitDataset(torch.utils.data.Dataset):
                 )
             )
             self._flat_index = [self._flat_index[int(pos)] for pos in kept_positions]
+        if self._sample_indices is not None:
+            self._apply_explicit_sample_indices()
 
         self._recording_cache: dict[str, Any] = {}
         self._channel_cache: dict[str, dict[str, Any]] = {}
@@ -2169,6 +2184,82 @@ class WindowedNeuroprobeSplitDataset(torch.utils.data.Dataset):
         if self._materialized is not None:
             return len(self._materialized)
         return len(self._flat_index)
+
+    def _apply_explicit_sample_indices(self) -> None:
+        """Keep exactly the train windows listed in a matched-subset file.
+
+        The subset file lists positions in this fold's full train split. Before
+        using them, the number of train windows and a checksum of their labels
+        are compared with the values stored in the file, so the positions are
+        only applied to the same windows they were computed on. Any mismatch
+        stops the run; there is no random fallback.
+
+        The positions were computed on train windows in the order a shuffled
+        train loader produced them (seeded with order_seed + fold index). That
+        order is recreated here: it is the 4th random permutation in the
+        sequence "p p b p b b p" (p = a permutation of all positions, b = one
+        int64 draw). Files whose checksum matches the plain dataset order are
+        accepted too.
+        """
+        spec = self._sample_indices
+        stem = spec["stem"]
+        if self.split != "train" or self._sample_fraction != 1.0:
+            raise ValueError(
+                f"Matched subset {stem}: explicit train indices need split='train' "
+                f"and sample_fraction=1.0 (got split={self.split!r}, "
+                f"fraction={self._sample_fraction})."
+            )
+        labels = [
+            int(np.asarray(self._interval_map[rid].label)[i])
+            for rid, i in self._flat_index
+        ]
+        n = len(labels)
+        if n != int(spec["n_train"]):
+            raise ValueError(
+                f"Matched subset {stem}: the train split has {n} windows, the "
+                f"subset file expects {spec['n_train']}. Refusing to subsample."
+            )
+        generator = torch.Generator()
+        generator.manual_seed(int(spec["order_seed"]) + int(spec["fold_idx"]))
+        loader_order: list[int] = []
+        for op in "ppbpbbp":
+            if op == "b":
+                torch.empty((), dtype=torch.int64).random_(generator=generator)
+            else:
+                loader_order = torch.randperm(n, generator=generator).tolist()
+        expected_crc = int(spec["y_train_crc32"])
+        loader_crc = zlib.crc32(json.dumps([labels[j] for j in loader_order]).encode())
+        dataset_crc = zlib.crc32(json.dumps(labels).encode())
+        if loader_crc == expected_crc:
+            order, how = loader_order, "train-loader order"
+        elif dataset_crc == expected_crc:
+            order, how = list(range(n)), "dataset order"
+        else:
+            raise ValueError(
+                f"Matched subset {stem}: {n} windows as expected, but the label "
+                f"checksum does not match (train-loader order {loader_crc}, "
+                f"dataset order {dataset_crc}, expected {expected_crc}). "
+                "Refusing to subsample."
+            )
+        positions = [int(position) for position in spec["positions"]]
+        if (
+            not positions
+            or min(positions) < 0
+            or max(positions) >= n
+            or len(set(positions)) != len(positions)
+        ):
+            raise ValueError(
+                f"Matched subset {stem}: positions must be unique and within "
+                f"0..{n - 1}."
+            )
+        keep = sorted(order[position] for position in positions)
+        self._flat_index = [self._flat_index[j] for j in keep]
+        log(
+            f"Matched subset {stem} fraction={spec['frac']} draw={spec['draw']}: "
+            f"checks passed ({how}); keeping {len(self._flat_index)} of {n} "
+            "train windows",
+            priority=0,
+        )
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         if self._materialized is not None:
@@ -2201,6 +2292,16 @@ class WindowedNeuroprobeSplitDataset(torch.utils.data.Dataset):
             "is_materialized": self.is_materialized(),
             "sample_fraction": float(self._sample_fraction),
             "sample_seed": self._sample_seed,
+            **(
+                {
+                    "matched_subset": {
+                        key: self._sample_indices[key]
+                        for key in ("stem", "frac", "draw", "order_seed")
+                    }
+                }
+                if self._sample_indices is not None
+                else {}
+            ),
             "max_samples_per_subject": self._max_samples_per_subject,
             "n_samples_before_subject_cap": int(self._n_samples_before_subject_cap),
             "n_samples_after_subject_cap": int(self._n_samples_after_subject_cap),
@@ -2670,6 +2771,75 @@ class WindowedNeuroprobeSplitDataset(torch.utils.data.Dataset):
         return sample
 
 
+_MATCHED_SUBSET_FILES: dict[str, Any] = {}
+
+
+class MatchedSubsetAbsent(ValueError):
+    """The subset file has no entry for this fold and draw.
+
+    The subset generator skips draws it cannot make (too few windows, or only
+    one class). The fold is then recorded as skipped instead of scored.
+    """
+
+
+def _resolve_matched_train_indices(
+    dataset_cfg: Any, fold_idx: int
+) -> dict[str, Any] | None:
+    """Look up this fold's matched train subset, or None when none is set.
+
+    dataset.train_sample_indices_file is a JSON file keyed by
+    "<task>_sub<S>_sess<E>_fold<F>". Each entry stores the number of train
+    windows (n_train), a checksum of their labels (y_train_crc32), and under
+    "subsets" -> fraction -> draw the positions of the train windows to keep.
+    dataset.train_sample_indices_frac and dataset.train_sample_indices_draw
+    pick the fraction and the draw.
+    """
+    path = _dataset_cfg_get(dataset_cfg, "train_sample_indices_file", None)
+    if not path:
+        return None
+    frac = _dataset_cfg_get(dataset_cfg, "train_sample_indices_frac", None)
+    draw = _dataset_cfg_get(dataset_cfg, "train_sample_indices_draw", None)
+    if frac is None or draw is None:
+        raise ValueError(
+            "dataset.train_sample_indices_file needs "
+            "dataset.train_sample_indices_frac and dataset.train_sample_indices_draw."
+        )
+    frac_key, draw_key = str(frac), str(int(draw))
+    path = str(path)
+    if path not in _MATCHED_SUBSET_FILES:
+        with open(path) as handle:
+            _MATCHED_SUBSET_FILES[path] = json.load(handle)
+    table = _MATCHED_SUBSET_FILES[path]
+    stem = (
+        f"{dataset_cfg.task}_sub{int(dataset_cfg.test_subject)}"
+        f"_sess{int(dataset_cfg.test_session)}_fold{int(fold_idx)}"
+    )
+    if stem not in table:
+        raise ValueError(
+            f"Matched subset {stem} is not in {path}. Refusing to subsample."
+        )
+    entry = table[stem]
+    by_frac = entry.get("subsets", {}).get(frac_key)
+    if by_frac is None:
+        raise ValueError(f"Matched subset {stem} has no fraction {frac_key} in {path}.")
+    if draw_key not in by_frac:
+        raise MatchedSubsetAbsent(
+            f"Matched subset {stem} fraction={frac_key} draw={draw_key} is absent: "
+            "the subset generator skipped this draw, so the fold is not scored."
+        )
+    order_seed = _dataset_cfg_get(dataset_cfg, "train_sample_indices_order_seed", None)
+    return {
+        "stem": stem,
+        "fold_idx": int(fold_idx),
+        "order_seed": 42 if order_seed is None else int(order_seed),
+        "frac": frac_key,
+        "draw": draw_key,
+        "n_train": entry["n_train"],
+        "y_train_crc32": entry["y_train_crc32"],
+        "positions": by_frac[draw_key],
+    }
+
+
 def build_neuroprobe_torch_fold(
     dataset_cfg: Any,
     preprocessor,
@@ -2741,6 +2911,18 @@ def build_neuroprobe_torch_fold(
             _dataset_cfg_get(dataset_cfg, "train_sample_fraction", 1.0)
         )
     )
+    matched_train_indices = _resolve_matched_train_indices(dataset_cfg, fold_idx)
+    if matched_train_indices is not None and (
+        uses_train_sources
+        or train_sample_fraction < 1.0
+        or _dataset_cfg_get(dataset_cfg, "max_train_samples_per_subject", None)
+        is not None
+    ):
+        raise ValueError(
+            "dataset.train_sample_indices_file cannot be combined with "
+            "train_sources, train_sample_fraction < 1 or "
+            "max_train_samples_per_subject."
+        )
     max_train_samples_per_subject_setting = (
         _normalize_max_train_samples_per_subject_setting(
             _dataset_cfg_get(dataset_cfg, "max_train_samples_per_subject", None)
@@ -3125,6 +3307,7 @@ def build_neuroprobe_torch_fold(
                 max_samples_per_subject=max_train_samples_per_subject,
                 sample_fraction=train_sample_fraction,
                 sample_seed=fold_seed,
+                sample_indices=matched_train_indices,
             )
         for split in ("val", "test"):
             split_datasets[split] = WindowedNeuroprobeSplitDataset(
