@@ -1,0 +1,40 @@
+# Miller ECoG library (2019) with real electrode positions.
+#
+# Needs the Miller build whose H5 files carry MNI152 positions
+# (coord_mni152_x/y/z and coord_mni152_quality per channel). On the build
+# without positions, every run with this config fails with a KeyError naming
+# the missing frame mni152_strict.
+#
+# Positions with quality "C" are a fallback, not a real atlas position, so they
+# are set to NaN and those channels are dropped. Run this config with the
+# positions cell list (--cells positions) so no recording loses all its
+# channels.
+#
+# PopT and BaRISTA use popt_miller below. DIVER's model config replaces it with
+# diver_mni, so the run script adds
+#   --set dataset.coordinate_profile=diver_mni_miller
+# to the DIVER row.
+#
+# Everything else is the same as millerecog2019.yaml; see that file for the
+# task set and subject numbers.
+root: ${paths.dataset_root}
+dirname: miller_ecog_library_2019
+provider: millerecog2019
+window_slicing_policy: ceil  # ceil | legacy_floor
+subset_tier: full
+label_mode: binary  # binary|multiclass
+task: move_vs_rest
+test_subject: 3
+test_session: 1
+regime: within-session  # The only regime: each recording is evaluated on its own.
+coordinate_profile: popt_miller  # popt_miller|diver_mni_miller
+train_same_subject_only: false
+# Fraction of train windows to keep via random subsampling per fold (0, 1].
+train_sample_fraction: 1.0
+max_train_samples_per_subject: null
+decodable_subject_sessions_only: false
+brain_area_key: null
+destrieux_brain_area_key: label_destrieux  # Selected by BaRISTA.
+uniquify_channel_ids_with_subject: true
+uniquify_channel_ids_with_session: true
+merge_val_into_test: false

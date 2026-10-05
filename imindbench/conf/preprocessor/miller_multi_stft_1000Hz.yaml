@@ -1,0 +1,31 @@
+# Miller version of multi_stft_1000Hz.
+# The Miller ECoG library stores its signal at 1000 Hz after a 0.5 Hz high-pass
+# filter, notch filters at 60, 120 and 180 Hz, and re-referencing. So this chain
+# leaves out the filtering, the context window, the crop and the Laplacian
+# re-referencing that the matching non-Miller preset does.
+chain:
+  - name: multi_stft
+    pad_mode: reflect
+    padded: false
+    sampling_rate: 1000
+    hop_length: 62        # ~62 ms, closest to 128 / 2048 = 62.5 ms
+    window: hann
+    normalizing: none
+    windows:
+      - label: low
+        nperseg: 500      # 500 ms
+        min_frequency: 2
+        max_frequency: 40
+
+      - label: mid
+        nperseg: 250      # 250 ms
+        min_frequency: 20
+        max_frequency: 150
+
+      - label: high
+        nperseg: 125      # 125 ms
+        min_frequency: 80
+        max_frequency: 250
+
+  - name: standardize
+    mode: per_channel_samples_time_pooled

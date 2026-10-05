@@ -1,0 +1,29 @@
+# Miller version of stft_brainbert_1000Hz.
+# The Miller ECoG library stores its signal at 1000 Hz after a 0.5 Hz high-pass
+# filter, notch filters at 60, 120 and 180 Hz, and re-referencing. So this chain
+# leaves out the filtering, the context window, the crop and the Laplacian
+# re-referencing that the matching non-Miller preset does.
+chain:
+  - name: stft
+    pad_mode: reflect
+    padded: false
+    nperseg: 250
+    poverlap: 0.75
+    window: hann
+    max_frequency: 150
+    min_frequency: 0
+    sampling_rate: 1000
+    normalizing: none
+    freq_channel_cutoff: 40
+
+  - name: standardize
+    mode: per_channel_samples_time_pooled
+
+  - name: brainbert_encoder
+    upstream_ckpt: ${paths.brainbert_checkpoint}
+    device: ${model.device}
+    clip_emb_k: 5
+    pool: mean
+    max_memory_fraction: 0.5
+    encoder_batch_size: null
+    min_batch_size: 32
