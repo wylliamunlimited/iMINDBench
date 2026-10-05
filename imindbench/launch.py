@@ -17,6 +17,7 @@ from imindbench.utils.result_io import is_valid_result_file
 
 CONF_DIR = Path(__file__).resolve().parent / "conf"
 POPULATION_DIR = Path(__file__).resolve().parent / "decodable_subject_sessions"
+CELL_MANIFEST_DIR = Path(__file__).resolve().parent / "cell_manifests"
 IDENTITY_KEYS = {
     "paths",
     "dataset",
@@ -66,6 +67,38 @@ def _key_value(override):
     if key.lstrip("+") in IDENTITY_KEYS or key.lstrip("+").startswith("hydra."):
         raise ValueError(f"Use selection flags or experiment configs to change {key}")
     return key, value
+
+
+def _load_selection_manifest(path, tasks, label):
+    """Read a {"tasks": {task: {"subject_sessions": [...]}}} selection file.
+
+    Returns {task: set of "sub<S>_sess<T>"} for the requested tasks. Every
+    requested task must be listed; a task with an empty list contributes no
+    evaluations.
+    """
+    selection = json.loads(Path(path).read_text())["tasks"]
+    if not isinstance(selection, dict):
+        raise ValueError(f"{label} tasks must be a mapping")
+    for task in tasks:
+        if (
+            not isinstance(selection.get(task), dict)
+            or "subject_sessions" not in selection[task]
+        ):
+            raise ValueError(f"{label} must list subject_sessions for {task}")
+        _validate_names(
+            selection[task]["subject_sessions"],
+            f"{label} targets",
+            allow_empty=True,
+        )
+    return {task: set(selection[task]["subject_sessions"]) for task in tasks}
+
+
+def _resolve_cells_path(cells, provider):
+    """--cells takes a packaged list name or a path to a JSON file."""
+    if cells.endswith(".json") or "/" in cells:
+        return Path(cells).expanduser().resolve()
+    _validate_name(cells, "cells")
+    return CELL_MANIFEST_DIR / provider / f"{cells}.json"
 
 
 def build_commands(args):
@@ -169,36 +202,26 @@ def build_commands(args):
                 f"Invalid target {target!r}; expected sub<S>_sess<T> (e.g. sub1_sess1)"
             )
         targets[target] = tuple(int(value) for value in match.groups())
-    population = None
+    # Each selection file keeps only the task/target pairs it lists. With both
+    # a decodable population and a cell list, a pair must be in both.
+    selections = []
     if decodable_dir is not None:
-        population = json.loads((decodable_dir / f"{provider}.json").read_text())[
-            "tasks"
-        ]
-        if not isinstance(population, dict):
-            raise ValueError("Decodable population tasks must be a mapping")
-        for task in tasks:
-            if (
-                not isinstance(population.get(task), dict)
-                or "subject_sessions" not in population[task]
-            ):
-                raise ValueError(
-                    f"Decodable population must list subject_sessions for {task}"
-                )
-            # A task with no decodable recordings contributes zero jobs.
-            _validate_names(
-                population[task]["subject_sessions"],
-                "decodable targets",
-                allow_empty=True,
+        selections.append(
+            _load_selection_manifest(
+                decodable_dir / f"{provider}.json", tasks, "Decodable population"
             )
+        )
+    if args.cells is not None:
+        cells_path = _resolve_cells_path(args.cells, provider)
+        if not cells_path.is_file():
+            raise ValueError(f"Cell list not found: {cells_path}")
+        selections.append(_load_selection_manifest(cells_path, tasks, "Cell list"))
     commands = []
     output = args.output_root.expanduser().resolve()
     for values, task, target in itertools.product(
         itertools.product(*sweeps.values()), tasks, targets
     ):
-        if (
-            population is not None
-            and target not in population[task]["subject_sessions"]
-        ):
+        if any(target not in selection[task] for selection in selections):
             continue
         subject, session = targets[target]
         run_dir = output / args.output_group / f"{args.model}_{args.preprocessor}"
@@ -319,6 +342,15 @@ def parser():
     )
     result.add_argument(
         "--decodable-rule", help="Packaged decodable population directory"
+    )
+    result.add_argument(
+        "--cells",
+        metavar="NAME|PATH",
+        help=(
+            "Run only the task/target pairs listed in this cell list: a name under "
+            "imindbench/cell_manifests/<dataset.provider>/, or a path to a JSON "
+            'file shaped like {"tasks": {task: {"subject_sessions": [...]}}}'
+        ),
     )
     result.add_argument("--sweep", action="append", default=[], metavar="KEY=V1,V2")
     result.add_argument(

@@ -471,3 +471,105 @@ def test_cli_executes_by_default_with_explicit_preview_modes(
         assert result.stat().st_mtime_ns == before
     else:
         assert not result.parent.exists()
+
+
+def _cells_file(tmp_path, tasks):
+    path = tmp_path / "cells.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tasks": {
+                    task: {"subject_sessions": targets}
+                    for task, targets in tasks.items()
+                }
+            }
+        )
+    )
+    return path
+
+
+def _task_targets(jobs):
+    return {
+        (_overrides(job["command"])["dataset.task"], Path(job["run_dir"]).name)
+        for job in jobs
+    }
+
+
+def test_cells_keeps_only_the_listed_pairs(tmp_path):
+    cells = _cells_file(
+        tmp_path,
+        {"onset": ["sub1_sess1", "sub2_sess4"], "speech": ["sub3_sess0"]},
+    )
+    args = _args(
+        "--task",
+        "onset",
+        "speech",
+        "--target",
+        "sub1_sess1",
+        "sub2_sess4",
+        "sub3_sess0",
+        "--cells",
+        str(cells),
+    )
+    args.output_root = tmp_path / "runs"
+    assert _task_targets(launch.build_commands(args)) == {
+        ("onset", "sub1_sess1"),
+        ("onset", "sub2_sess4"),
+        ("speech", "sub3_sess0"),
+    }
+
+
+def test_cells_by_name_reads_the_packaged_directory(tmp_path, monkeypatch):
+    (tmp_path / "neuroprobev2").mkdir()
+    _cells_file(tmp_path / "neuroprobev2", {"onset": ["sub1_sess1"]}).rename(
+        tmp_path / "neuroprobev2" / "my_cells.json"
+    )
+    monkeypatch.setattr(launch, "CELL_MANIFEST_DIR", tmp_path)
+    args = _args("--target", "sub1_sess1", "sub2_sess4", "--cells", "my_cells")
+    assert _task_targets(launch.build_commands(args)) == {("onset", "sub1_sess1")}
+
+
+def test_cells_and_decodable_population_must_both_list_a_pair(tmp_path):
+    population = json.loads(
+        (
+            launch.POPULATION_DIR / "stft_or_htnet_500hz_val_mean0p60/neuroprobev2.json"
+        ).read_text()
+    )["tasks"]
+    task = next(t for t, entry in population.items() if entry["subject_sessions"])
+    listed = population[task]["subject_sessions"][0]
+    cells = _cells_file(tmp_path, {task: [listed, "sub99_sess9"]})
+    args = _args(
+        "--task",
+        task,
+        "--target",
+        listed,
+        "sub99_sess9",
+        "--decodable-rule",
+        "stft_or_htnet_500hz_val_mean0p60",
+        "--cells",
+        str(cells),
+    )
+    assert _task_targets(launch.build_commands(args)) == {(task, listed)}
+
+
+@pytest.mark.parametrize(
+    ("cells", "message"),
+    [
+        (
+            {"other_task": ["sub1_sess1"]},
+            "Cell list must list subject_sessions for onset",
+        ),
+        ({"onset": []}, "No evaluations remain"),
+    ],
+)
+def test_cells_errors(tmp_path, cells, message):
+    path = _cells_file(tmp_path, cells)
+    with pytest.raises(ValueError, match=message):
+        launch.build_commands(_args("--cells", str(path)))
+
+
+def test_missing_cell_list_is_reported(tmp_path):
+    with pytest.raises(ValueError, match="Cell list not found"):
+        launch.build_commands(_args("--cells", str(tmp_path / "absent.json")))
+    with pytest.raises(ValueError, match="cells must be a simple name"):
+        launch.build_commands(_args("--cells", "bad name"))
