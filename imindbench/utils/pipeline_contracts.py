@@ -75,6 +75,19 @@ def _require_torch_brain_berezutskaya_pippi_2022():
     return BerezutskayaPippi2022
 
 
+def _require_torch_brain_miller_ecog_2019():
+    # Import lazily so local tooling/tests that do not instantiate datasets can
+    # still import this module without optional data dependencies installed.
+    try:
+        from torch_brain.datasets import MillerECoG2019
+    except ImportError as exc:
+        raise ImportError(
+            "Processed provider 'millerecog2019' requires torch_brain.datasets "
+            "with MillerECoG2019."
+        ) from exc
+    return MillerECoG2019
+
+
 # =========================
 # Routing
 # =========================
@@ -128,6 +141,18 @@ _PROVIDER_SPECS: dict[str, dict[str, Any]] = {
             "hold-out-subject": True,
         },
         "valid_subset_tiers": {"full", "high-cov", "low-cov"},
+    },
+    # Kai Miller's ECoG library (2019). One recording is one subject doing one
+    # task set, so only within-session evaluation exists. The stored signal is
+    # in microvolts and comes from ECoG grids and strips.
+    "millerecog2019": {
+        "signal_unit": "uV",
+        "electrode_subtype": "grid",
+        "dataset_class_loader": _require_torch_brain_miller_ecog_2019,
+        "regime_is_multi_subject": {
+            "within-session": False,
+        },
+        "valid_subset_tiers": {"full"},
     },
 }
 
@@ -294,7 +319,14 @@ def build_processed_split_provider(
 
 VALID_LABEL_MODES = {"binary", "multiclass"}
 VALID_SUBSET_TIERS = {"full", "lite", "nano"}
-VALID_COORDINATE_PROFILES = {"popt_lip", "diver_mni"}
+VALID_COORDINATE_PROFILES = {
+    "popt_lip",
+    "diver_mni",
+    # The three profiles below cover millerecog2019 only.
+    "popt_zero",
+    "popt_miller",
+    "diver_mni_miller",
+}
 
 
 def _validate_label_mode(label_mode: str) -> None:
