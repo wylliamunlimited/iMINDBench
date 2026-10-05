@@ -483,6 +483,15 @@ def _train_source_cache_path(
     return cache_dir / provider / f"{digest}.pkl"
 
 
+def _optional_task_mode_identity(dataset_cfg: Any) -> dict[str, Any]:
+    """Cache-id entries for options that change the windows or their labels."""
+    identity: dict[str, Any] = {}
+    class_pair = _dataset_cfg_get(dataset_cfg, "class_pair", None)
+    if class_pair is not None:
+        identity["class_pair"] = [int(label) for label in class_pair]
+    return identity
+
+
 def _build_preprocessed_split_cache_identity(
     *,
     dataset_cfg: Any,
@@ -501,6 +510,8 @@ def _build_preprocessed_split_cache_identity(
         "dirname": str(dataset_cfg.dirname),
         "subset_tier": str(dataset_cfg.subset_tier),
         "label_mode": str(dataset_cfg.label_mode),
+        # Added only when set, so the cache ids of existing runs do not change.
+        **_optional_task_mode_identity(dataset_cfg),
         "task": str(dataset_cfg.task),
         "regime": str(dataset_cfg.regime),
         "coordinate_profile": str(
@@ -3505,6 +3516,7 @@ def build_neuroprobe_torch_fold(
     metadata = {
         "task": dataset_cfg.task,
         "label_mode": dataset_cfg.label_mode,
+        **_optional_task_mode_identity(dataset_cfg),
         "regime": regime,
         "needs_region_intersection_pool": needs_pool,
         "dataset_provider": dataset_provider,

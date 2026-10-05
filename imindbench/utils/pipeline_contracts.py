@@ -149,6 +149,9 @@ _PROVIDER_SPECS: dict[str, dict[str, Any]] = {
         "signal_unit": "uV",
         "electrode_subtype": "grid",
         "dataset_class_loader": _require_torch_brain_miller_ecog_2019,
+        # dataset.class_pair: score two classes of a multiclass task as a
+        # binary task.
+        "supports_class_pair": True,
         "regime_is_multi_subject": {
             "within-session": False,
         },
@@ -284,6 +287,19 @@ def _validate_provider_regime(
         )
 
 
+def _class_pair_kwarg(dataset_cfg: Any) -> dict[str, Any]:
+    """Pass dataset.class_pair to the dataset class only when it is set.
+
+    Datasets without class-pair support never receive the argument, so their
+    constructors stay unchanged.
+    """
+    class_pair = _cfg_like_get(dataset_cfg, "class_pair", None)
+    if class_pair is None:
+        return {}
+    first, second = (int(label) for label in class_pair)
+    return {"class_pair": (first, second)}
+
+
 def build_processed_split_provider(
     *,
     dataset_provider: Any,
@@ -306,6 +322,7 @@ def build_processed_split_provider(
         split=split,
         label_mode=dataset_cfg.label_mode,
         task=dataset_cfg.task,
+        **_class_pair_kwarg(dataset_cfg),
         regime=regime,
         fold=fold_idx,
         uniquify_channel_ids_with_subject=dataset_cfg.uniquify_channel_ids_with_subject,
@@ -522,6 +539,70 @@ def _parse_optional_dataset_coordinate_profile(
             f"{sorted(VALID_COORDINATE_PROFILES)}, got '{value}'."
         )
     return value
+
+
+def _parse_optional_dataset_class_pair(
+    dataset_cfg: dict[str, Any],
+) -> tuple[int, int] | None:
+    """Read dataset.class_pair: null, or two different non-negative labels."""
+    value = dataset_cfg.get("class_pair", None)
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError(
+            "dataset.class_pair must be null or a list of two class labels, "
+            f"got {value!r}."
+        )
+    labels = []
+    for label in value:
+        if isinstance(label, bool) or not isinstance(label, int):
+            raise TypeError(
+                f"dataset.class_pair labels must be ints, got {type(label).__name__}."
+            )
+        if label < 0:
+            raise ValueError(f"dataset.class_pair labels must be >= 0, got {label}.")
+        labels.append(label)
+    if labels[0] == labels[1]:
+        raise ValueError(
+            f"dataset.class_pair must name two different labels, got {labels}."
+        )
+    return labels[0], labels[1]
+
+
+def _validate_task_mode_options(
+    dataset_cfg: dict[str, Any],
+    *,
+    provider: str,
+    train_sources: list[dict[str, Any]],
+) -> None:
+    """Check the options that change what a cell scores.
+
+    dataset.class_pair keeps only the windows of two classes of a multiclass
+    task and scores them as a binary task: the first label becomes class 0
+    and the second label becomes class 1.
+    """
+    label_mode = dataset_cfg.get("label_mode")
+    class_pair = _parse_optional_dataset_class_pair(dataset_cfg)
+    if class_pair is not None:
+        if label_mode != "multiclass":
+            raise ValueError(
+                "dataset.class_pair needs dataset.label_mode='multiclass', got "
+                f"'{label_mode}'."
+            )
+        if not _get_provider_spec(provider).get("supports_class_pair", False):
+            supported = sorted(
+                name
+                for name, spec in _PROVIDER_SPECS.items()
+                if spec.get("supports_class_pair", False)
+            )
+            raise ValueError(
+                f"dataset.class_pair is unsupported for dataset.provider='{provider}'. "
+                f"Supported providers: {supported}."
+            )
+        if train_sources:
+            raise ValueError(
+                "dataset.class_pair cannot be combined with dataset.train_sources."
+            )
 
 
 def _cfg_like_get(cfg_like: Any, key: str, default: Any = None) -> Any:
@@ -946,6 +1027,9 @@ def validate_eval_config(cfg: DictConfig) -> None:
     _parse_optional_dataset_coordinate_profile(dataset_cfg)
     dataset_brain_area_key = _parse_optional_dataset_brain_area_key(dataset_cfg)
     train_sources = resolve_train_source_configs(dataset_cfg)
+    _validate_task_mode_options(
+        dataset_cfg, provider=provider, train_sources=train_sources
+    )
     if decodable_subject_sessions_only:
         paths_cfg = cfg.get("paths", None)
         decodable_dir = (

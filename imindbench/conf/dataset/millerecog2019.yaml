@@ -36,6 +36,10 @@ provider: millerecog2019
 window_slicing_policy: ceil  # ceil | legacy_floor
 subset_tier: full
 label_mode: binary  # binary|multiclass
+# class_pair: [a, b] keeps only the windows of stored labels a and b of a
+# multiclass task and scores them as a binary task, with b as the positive
+# class. Needs label_mode: multiclass. null scores the task as usual.
+class_pair: null
 task: move_vs_rest
 test_subject: 3
 test_session: 1
