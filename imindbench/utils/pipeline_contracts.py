@@ -603,6 +603,93 @@ def _validate_task_mode_options(
             raise ValueError(
                 "dataset.class_pair cannot be combined with dataset.train_sources."
             )
+    _parse_optional_dataset_fold_subset(dataset_cfg)
+    _validate_matched_subset_options(dataset_cfg, train_sources=train_sources)
+
+
+def _parse_optional_dataset_fold_subset(dataset_cfg: dict[str, Any]) -> None:
+    """dataset.fold_subset: null (every fold) or a list of fold indices.
+
+    The fold count is only known once the dataset class is loaded, so the
+    upper bound is checked when the folds are iterated.
+    """
+    value = dataset_cfg.get("fold_subset", None)
+    if value is None:
+        return
+    if not isinstance(value, (list, tuple)) or not value:
+        raise ValueError(
+            f"dataset.fold_subset must be null or a non-empty list, got {value!r}."
+        )
+    for fold_idx in value:
+        if isinstance(fold_idx, bool) or not isinstance(fold_idx, int):
+            raise TypeError(
+                "dataset.fold_subset entries must be ints, got "
+                f"{type(fold_idx).__name__}."
+            )
+        if fold_idx < 0:
+            raise ValueError(
+                f"dataset.fold_subset entries must be >= 0, got {fold_idx}."
+            )
+    if len(set(value)) != len(value):
+        raise ValueError(
+            f"dataset.fold_subset must not repeat folds, got {list(value)}."
+        )
+
+
+def _validate_matched_subset_options(
+    dataset_cfg: dict[str, Any],
+    *,
+    train_sources: list[dict[str, Any]],
+) -> None:
+    """Check dataset.train_sample_indices_* (matched train subsets).
+
+    train_sample_indices_file names a JSON file of precomputed train subsets.
+    train_sample_indices_frac picks the fraction, train_sample_indices_draw
+    picks the draw, and train_sample_indices_order_seed is the seed of the run
+    the subsets were computed on (default 42).
+    """
+    path = dataset_cfg.get("train_sample_indices_file", None)
+    frac = dataset_cfg.get("train_sample_indices_frac", None)
+    draw = dataset_cfg.get("train_sample_indices_draw", None)
+    order_seed = dataset_cfg.get("train_sample_indices_order_seed", None)
+    if path is None:
+        if frac is not None or draw is not None:
+            raise ValueError(
+                "dataset.train_sample_indices_frac and _draw need "
+                "dataset.train_sample_indices_file."
+            )
+        return
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("dataset.train_sample_indices_file must be a non-empty str.")
+    if frac is None or draw is None:
+        raise ValueError(
+            "dataset.train_sample_indices_file needs "
+            "dataset.train_sample_indices_frac and dataset.train_sample_indices_draw."
+        )
+    if isinstance(frac, bool) or not isinstance(frac, (int, float, str)):
+        raise TypeError("dataset.train_sample_indices_frac must be a number or str.")
+    for key, value in (("draw", draw), ("order_seed", order_seed)):
+        if value is None and key == "order_seed":
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(
+                f"dataset.train_sample_indices_{key} must be an int >= 0, got {value!r}."
+            )
+    if train_sources:
+        raise ValueError(
+            "dataset.train_sample_indices_file cannot be combined with "
+            "dataset.train_sources."
+        )
+    if float(dataset_cfg.get("train_sample_fraction", 1.0) or 1.0) < 1.0:
+        raise ValueError(
+            "dataset.train_sample_indices_file cannot be combined with "
+            "dataset.train_sample_fraction < 1."
+        )
+    if dataset_cfg.get("max_train_samples_per_subject", None) is not None:
+        raise ValueError(
+            "dataset.train_sample_indices_file cannot be combined with "
+            "dataset.max_train_samples_per_subject."
+        )
 
 
 def _cfg_like_get(cfg_like: Any, key: str, default: Any = None) -> Any:

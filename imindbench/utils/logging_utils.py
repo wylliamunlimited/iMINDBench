@@ -230,6 +230,14 @@ def resolve_task_mode_config(dataset_cfg) -> dict:
     class_pair = dataset_cfg.get("class_pair", None)
     if class_pair is not None:
         entries["class_pair"] = [int(label) for label in class_pair]
+    fold_subset = dataset_cfg.get("fold_subset", None)
+    if fold_subset is not None:
+        entries["fold_subset"] = [int(fold_idx) for fold_idx in fold_subset]
+    if dataset_cfg.get("train_sample_indices_file", None):
+        entries["train_sample_indices"] = {
+            "frac": str(dataset_cfg.get("train_sample_indices_frac")),
+            "draw": int(dataset_cfg.get("train_sample_indices_draw")),
+        }
     return entries
 
 
