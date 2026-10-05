@@ -13,6 +13,30 @@ class BaseRunner:
         self.cfg = cfg
 
     @staticmethod
+    def build_regression_fold_result(split_scores: dict[str, dict | None]) -> dict:
+        """One regression fold result from the per-split scores.
+
+        For each split: <split>_traj_r (main score), <split>_mean_r,
+        <split>_traj_mse, <split>_traj_r2 and <split>_n_windows, plus traj_len.
+        """
+        result: dict = {"label_mode": "regression"}
+        traj_lens = set()
+        for split, scores in split_scores.items():
+            if scores is None:
+                continue
+            result[f"{split}_traj_r"] = float(scores["traj_r"])
+            result[f"{split}_mean_r"] = float(scores["mean_r"])
+            result[f"{split}_traj_mse"] = float(scores["traj_mse"])
+            result[f"{split}_traj_r2"] = float(scores["traj_r2"])
+            result[f"{split}_n_windows"] = int(scores["n_windows"])
+            traj_lens.add(int(scores["traj_len"]))
+        if len(traj_lens) > 1:
+            raise ValueError(f"Splits disagree on trajectory length: {traj_lens}.")
+        if traj_lens:
+            result["traj_len"] = traj_lens.pop()
+        return result
+
+    @staticmethod
     def _compute_metrics(y_true, y_proba, classes):
         """Compute accuracy and ROC-AUC for a set of predictions."""
         y_true = np.asarray(y_true)

@@ -152,6 +152,9 @@ _PROVIDER_SPECS: dict[str, dict[str, Any]] = {
         # dataset.class_pair: score two classes of a multiclass task as a
         # binary task.
         "supports_class_pair": True,
+        # dataset.label_mode: regression, for the task sets with continuous
+        # targets instead of classes.
+        "supports_regression": True,
         "regime_is_multi_subject": {
             "within-session": False,
         },
@@ -334,7 +337,9 @@ def build_processed_split_provider(
 # Config
 # =========================
 
-VALID_LABEL_MODES = {"binary", "multiclass"}
+VALID_LABEL_MODES = {"binary", "multiclass", "regression"}
+VALID_REGRESSION_HEADS = {"trained_mse", "ridge"}
+VALID_REGRESSION_HEAD_LAMBDA_MODES = {"fixed", "trace", "gcv"}
 VALID_SUBSET_TIERS = {"full", "lite", "nano"}
 VALID_COORDINATE_PROFILES = {
     "popt_lip",
@@ -346,10 +351,24 @@ VALID_COORDINATE_PROFILES = {
 }
 
 
-def _validate_label_mode(label_mode: str) -> None:
+def _validate_label_mode(label_mode: str, *, provider: str | None = None) -> None:
     if label_mode not in VALID_LABEL_MODES:
         raise ValueError(
             f"label_mode must be one of {sorted(VALID_LABEL_MODES)}, got '{label_mode}'."
+        )
+    if (
+        label_mode == "regression"
+        and provider in _PROVIDER_SPECS
+        and not _get_provider_spec(provider).get("supports_regression", False)
+    ):
+        supported = sorted(
+            name
+            for name, spec in _PROVIDER_SPECS.items()
+            if spec.get("supports_regression", False)
+        )
+        raise ValueError(
+            f"label_mode='regression' is unsupported for dataset.provider='{provider}'. "
+            f"Supported providers: {supported}."
         )
 
 
@@ -605,6 +624,115 @@ def _validate_task_mode_options(
             )
     _parse_optional_dataset_fold_subset(dataset_cfg)
     _validate_matched_subset_options(dataset_cfg, train_sources=train_sources)
+    last_samples = dataset_cfg.get("regression_target_last_samples", None)
+    if last_samples is not None:
+        if (
+            isinstance(last_samples, bool)
+            or not isinstance(last_samples, int)
+            or last_samples < 0
+        ):
+            raise ValueError(
+                "dataset.regression_target_last_samples must be an int >= 0, got "
+                f"{last_samples!r}."
+            )
+        if last_samples > 0 and label_mode != "regression":
+            raise ValueError(
+                "dataset.regression_target_last_samples needs "
+                f"dataset.label_mode='regression', got '{label_mode}'."
+            )
+    if label_mode == "regression":
+        # A regression window's y is its row in the target table, not a class,
+        # so options that balance, cap or pool windows by class do not apply.
+        conflicts = {
+            "train_sources": bool(train_sources),
+            "max_train_samples_per_subject": dataset_cfg.get(
+                "max_train_samples_per_subject", None
+            )
+            is not None,
+            "merge_val_into_test": bool(dataset_cfg.get("merge_val_into_test", False)),
+            "decodable_subject_sessions_only": bool(
+                dataset_cfg.get("decodable_subject_sessions_only", False)
+            ),
+            "train_sample_indices_file": bool(
+                dataset_cfg.get("train_sample_indices_file", None)
+            ),
+        }
+        used = sorted(key for key, is_set in conflicts.items() if is_set)
+        if used:
+            raise ValueError(
+                "dataset.label_mode='regression' cannot be combined with "
+                f"dataset.{', dataset.'.join(used)}."
+            )
+
+
+def _validate_regression_model_options(
+    model_cfg: Any, *, backend: str, model_name: str
+) -> None:
+    """Check model.regression_head and its ridge settings.
+
+    model.regression_head picks how a torch model's output layer is fitted for
+    regression: trained_mse trains the whole model with a mean-squared-error
+    loss; ridge keeps the rest of the model fixed and solves the output layer
+    in closed form with ridge regression. The sklearn backend always fits a
+    ridge regression with alpha = model.regression_head_lambda.
+
+    regression_head_lambda_mode picks the ridge strength: fixed uses
+    regression_head_lambda; trace uses regression_head_lambda_alpha times the
+    mean feature variance; gcv picks the value from regression_head_lambda_grid
+    with the lowest generalized cross-validation error.
+    """
+    head = model_cfg.get("regression_head", "trained_mse")
+    if head not in VALID_REGRESSION_HEADS:
+        raise ValueError(
+            f"model.regression_head must be one of {sorted(VALID_REGRESSION_HEADS)}, "
+            f"got {head!r}."
+        )
+    if head == "ridge" and backend == "torch":
+        ridge_ready = model_name == "linear_baseline" or (
+            model_name == "diver"
+            and model_cfg.get("ft_head_style", "flatten_linear") == "flatten_linear"
+            and not model_cfg.get("ft_mup", False)
+        )
+        if not ridge_ready:
+            raise ValueError(
+                "model.regression_head='ridge' needs a model whose output is one "
+                "linear layer: linear_baseline, or diver with "
+                "ft_head_style=flatten_linear and ft_mup=false. "
+                f"Got model.name='{model_name}'."
+            )
+    lam = model_cfg.get("regression_head_lambda", 1.0)
+    alpha = model_cfg.get("regression_head_lambda_alpha", 1.0)
+    for key, value in (("lambda", lam), ("lambda_alpha", alpha)):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError(
+                f"model.regression_head_{key} must be a number > 0, got {value!r}."
+            )
+    mode = model_cfg.get("regression_head_lambda_mode", "fixed")
+    if mode not in VALID_REGRESSION_HEAD_LAMBDA_MODES:
+        raise ValueError(
+            "model.regression_head_lambda_mode must be one of "
+            f"{sorted(VALID_REGRESSION_HEAD_LAMBDA_MODES)}, got {mode!r}."
+        )
+    if mode != "fixed" and backend != "torch":
+        raise ValueError(
+            "model.regression_head_lambda_mode other than 'fixed' needs the torch "
+            "backend; the sklearn backend uses regression_head_lambda as given."
+        )
+    grid = model_cfg.get("regression_head_lambda_grid", [3e3, 1e4, 3e4, 1e5, 3e5])
+    if OmegaConf.is_config(grid):
+        grid = OmegaConf.to_container(grid, resolve=True)
+    if (
+        not isinstance(grid, (list, tuple))
+        or not grid
+        or any(
+            isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0
+            for v in grid
+        )
+    ):
+        raise ValueError(
+            "model.regression_head_lambda_grid must be a non-empty list of numbers "
+            f"> 0, got {grid!r}."
+        )
 
 
 def _parse_optional_dataset_fold_subset(dataset_cfg: dict[str, Any]) -> None:
@@ -1081,10 +1209,12 @@ def validate_eval_config(cfg: DictConfig) -> None:
     _require_non_empty_dataset_str(dataset_cfg, "root")
     _require_non_empty_dataset_str(dataset_cfg, "dirname")
     _require_non_empty_dataset_str(dataset_cfg, "task")
-    _validate_label_mode(_require_non_empty_dataset_str(dataset_cfg, "label_mode"))
     _require_dataset_int(dataset_cfg, "test_subject")
     _require_dataset_int(dataset_cfg, "test_session")
     provider = _require_non_empty_dataset_str(dataset_cfg, "provider")
+    _validate_label_mode(
+        _require_non_empty_dataset_str(dataset_cfg, "label_mode"), provider=provider
+    )
     regime = _require_non_empty_dataset_str(dataset_cfg, "regime")
     _validate_subset_tier(
         _require_non_empty_dataset_str(dataset_cfg, "subset_tier"),
@@ -1160,6 +1290,15 @@ def validate_eval_config(cfg: DictConfig) -> None:
     backend = _require_non_empty_cfg_str(model_cfg, section="model", key="backend")
     if backend not in {"sklearn", "torch"}:
         raise ValueError(f"model.backend must be sklearn or torch, got {backend!r}.")
+    if dataset_cfg.get("label_mode") == "regression":
+        if backend == "sklearn" and model_name != "logistic":
+            raise ValueError(
+                "dataset.label_mode='regression' with model.backend=sklearn supports "
+                f"model.name='logistic' only, got '{model_name}'."
+            )
+        _validate_regression_model_options(
+            model_cfg, backend=backend, model_name=model_name
+        )
     if backend == "torch":
         # Reject training-setting typos before any fold is built.
         training_mode = model_cfg.get("training_mode", "epoch_based")
