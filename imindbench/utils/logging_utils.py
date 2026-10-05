@@ -217,6 +217,22 @@ def log_fold_split_sample_counts(
     )
 
 
+def resolve_task_mode_config(dataset_cfg) -> dict:
+    """Result-config entries for options that change what a cell scores.
+
+    Each entry is added only when it differs from the default, so result files
+    of plain binary runs keep exactly their previous shape.
+    """
+    entries = {}
+    label_mode = dataset_cfg.get("label_mode", "binary")
+    if label_mode != "binary":
+        entries["label_mode"] = str(label_mode)
+    class_pair = dataset_cfg.get("class_pair", None)
+    if class_pair is not None:
+        entries["class_pair"] = [int(label) for label in class_pair]
+    return entries
+
+
 def build_public_export_result(
     *,
     internal_result,
@@ -254,6 +270,7 @@ def build_public_export_result(
             "eval_name": internal_result["task"],
             "splits_type": internal_result["regime"],
             "model_name": model_name,
+            **config_summary.get("task_mode", {}),
         },
         "timing": dict(internal_result["timing"]),
     }
@@ -274,6 +291,7 @@ def build_internal_eval_result(
     results_population,
     subject_load_time,
     regression_run_time,
+    task_mode_config=None,
 ):
     """Build generic internal evaluation result payload.
 
@@ -298,6 +316,7 @@ def build_internal_eval_result(
             "preprocess": preprocess_parameters,
             "window_slicing_policy": window_slicing_policy,
             "seed": int(seed),
+            **({"task_mode": dict(task_mode_config)} if task_mode_config else {}),
         },
         # Unix timestamp is easier to aggregate in downstream scripts than a
         # pre-formatted datetime string.
@@ -411,6 +430,7 @@ def format_and_save_results(
         results_population=results_population,
         subject_load_time=data_load_time,
         regression_run_time=regression_run_time,
+        task_mode_config=resolve_task_mode_config(cfg.dataset),
     )
     results = build_public_export_result(
         internal_result=internal_result,
