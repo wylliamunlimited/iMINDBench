@@ -29,6 +29,7 @@ def test_processed_providers_resolve_from_torch_brain_datasets(monkeypatch):
         "neuroprobe2025": type("Neuroprobe2025", (), {}),
         "kelesbyd2024": type("KelesBYD2024", (), {}),
         "berezutskayapippi2022": type("BerezutskayaPippi2022", (), {}),
+        "millerecog2019": type("MillerECoG2019", (), {}),
     }
     datasets_module = types.ModuleType("torch_brain.datasets")
     for dataset_class in dataset_classes.values():
@@ -45,7 +46,8 @@ def test_processed_providers_resolve_from_torch_brain_datasets(monkeypatch):
         assert get_dataset_class(provider) is expected_class
 
 
-def test_missing_torch_brain_dataset_api_has_actionable_error(monkeypatch):
+@pytest.mark.parametrize("provider", ["neuroprobev2", "millerecog2019"])
+def test_missing_torch_brain_dataset_api_has_actionable_error(monkeypatch, provider):
     original_import = builtins.__import__
 
     def block_torch_brain_datasets(name, *args, **kwargs):
@@ -56,5 +58,5 @@ def test_missing_torch_brain_dataset_api_has_actionable_error(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", block_torch_brain_datasets)
 
     with pytest.raises(ImportError, match="torch_brain.datasets") as exc_info:
-        get_dataset_class("neuroprobev2")
+        get_dataset_class(provider)
     assert isinstance(exc_info.value.__cause__, ImportError)
