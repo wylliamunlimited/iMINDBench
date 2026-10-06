@@ -60,6 +60,19 @@ def test_letter_coded_recording_ids_become_numbers(fake_miller, recording_id, ex
     )
 
 
+def test_regression_set_ids_parse_although_the_module_pattern_rejects_them(
+    fake_miller,
+):
+    import miller_fakes
+
+    with pytest.raises(ValueError):
+        miller_fakes._from_recording_id("sub-bp_set-fingerflex_reg_w1000h25b")
+    assert data_adapter._subject_session_from_recording_id(
+        recording_id="sub-bp_set-fingerflex_reg_w1000h25b",
+        dataset_provider="millerecog2019",
+    ) == (3, 25)
+
+
 def test_bad_recording_id_is_rejected(fake_miller):
     with pytest.raises(ValueError, match="Invalid MillerECoG2019 recording_id"):
         data_adapter._subject_session_from_recording_id(

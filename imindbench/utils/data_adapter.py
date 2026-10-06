@@ -871,6 +871,26 @@ def _normalize_max_train_samples_per_subject_setting(
     return _normalize_max_train_samples_per_subject(value)
 
 
+_MILLER_RECORDING_ID_RE = re.compile(
+    r"^sub-(?P<subject>[a-z]{2})_set-(?P<task_set>[a-z][a-z0-9_]*)$"
+)
+
+
+def split_miller_recording_id(recording_id: str) -> tuple[str, str]:
+    """Split a Miller recording id into (subject code, task set).
+
+    Read here rather than with the dataset module's own pattern, because that
+    pattern (brainsets fork, miller-ecog-modularize) does not allow digits and
+    so rejects the regression task sets, for example fingerflex_reg_w1000.
+    """
+    match = _MILLER_RECORDING_ID_RE.fullmatch(
+        _strip_optional_source_prefix(recording_id)
+    )
+    if match is None:
+        raise ValueError(f"Invalid MillerECoG2019 recording_id '{recording_id}'.")
+    return match.group("subject"), match.group("task_set")
+
+
 def _miller_subject_session(recording_id: str) -> tuple[int, int]:
     """Turn a Miller recording id into (subject number, session number).
 
@@ -882,9 +902,7 @@ def _miller_subject_session(recording_id: str) -> tuple[int, int]:
     """
     dataset_cls = get_dataset_class("millerecog2019")
     module = sys.modules[dataset_cls.__module__]
-    code, task_set = module._from_recording_id(
-        _strip_optional_source_prefix(recording_id)
-    )
+    code, task_set = split_miller_recording_id(recording_id)
     return module.subject_number_for(code), module.session_number_for(task_set)
 
 
