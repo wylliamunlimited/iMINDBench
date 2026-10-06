@@ -66,6 +66,11 @@ python -m imindbench.cell_manifests.build_millerecog2019 \
     --data-dir <dataset_root>/miller_ecog_library_2019
 ```
 
+The script reads the subject and task-set tables from the `MillerECoG2019`
+dataset module in `torch_brain.datasets`. If the installed torch_brain does
+not have that class yet, install the brainsets version (for example the
+brainsets fork branch `miller-ecog-modularize`) and add `--from-brainsets`.
+
 The script opens every H5 file, reads the task lists the brainsets pipeline
 stored in it (`tasks_json`, `control_tasks_json`, `regression_tasks_json`),
 turns each recording id into `sub<S>_sess<T>`, and writes the lists above into

@@ -111,3 +111,36 @@ def test_positions_list_is_skipped_without_positions(tmp_path, monkeypatch):
     builder.main(["--data-dir", str(data), "--out-dir", str(out)])
     assert (out / "binary.json").exists()
     assert not (out / "positions.json").exists()
+
+
+def test_from_brainsets_reads_tables_from_the_brainsets_module(tmp_path, monkeypatch):
+    import sys
+
+    import miller_fakes
+
+    # No fake torch_brain class is installed, so only the brainsets path works.
+    monkeypatch.setitem(sys.modules, "brainsets.datasets.MillerECoG2019", miller_fakes)
+    data = tmp_path / "data"
+    data.mkdir()
+    _write_h5(data / "sub-zt_set-gestures.h5", tasks=[_binary("gesture_vs_rest")])
+    _write_h5(
+        data / "sub-zt_set-mouse_track_w1000h50.h5",
+        tasks=[],
+        regression=[{"target": "cursor_vx"}],
+    )
+    out = tmp_path / "lists"
+    builder.main(["--data-dir", str(data), "--out-dir", str(out), "--from-brainsets"])
+    manifest = json.loads((out / "binary.json").read_text())
+    assert manifest["tasks"]["gesture_vs_rest"]["subject_sessions"] == ["sub29_sess5"]
+    sliding = json.loads((out / "regression_sliding.json").read_text())
+    assert sliding["tasks"]["cursor_vx"]["subject_sessions"] == ["sub29_sess24"]
+
+
+def test_from_brainsets_without_brainsets_is_reported(monkeypatch):
+    import sys
+
+    import pytest
+
+    monkeypatch.setitem(sys.modules, "brainsets.datasets.MillerECoG2019", None)
+    with pytest.raises(ImportError, match="--from-brainsets needs brainsets"):
+        builder.miller_dataset_module(from_brainsets=True)

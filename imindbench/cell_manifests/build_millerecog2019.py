@@ -2,7 +2,14 @@
 
 Usage:
     python -m imindbench.cell_manifests.build_millerecog2019 \
-        --data-dir <dataset_root>/miller_ecog_library_2019 [--out-dir DIR]
+        --data-dir <dataset_root>/miller_ecog_library_2019 [--out-dir DIR] \
+        [--from-brainsets]
+
+The subject and task-set tables come from the MillerECoG2019 dataset module.
+By default that is the class torch_brain.datasets provides. Add
+--from-brainsets to use brainsets.datasets.MillerECoG2019 instead, for
+example from the brainsets fork branch miller-ecog-modularize, when the
+installed torch_brain does not have the class yet.
 
 What it does, step by step:
 1. Opens every <recording id>.h5 file in --data-dir. Each file is one subject
@@ -80,6 +87,41 @@ def _good_position_channels(handle) -> int | None:
     quality = np.asarray(channels["coord_mni152_quality"][()]).astype(str)
     included = np.asarray(channels["included"][()]).astype(bool)
     return int(np.sum(included & np.isin(quality, sorted(GOOD_POSITION_QUALITY))))
+
+
+def miller_dataset_module(*, from_brainsets: bool = False):
+    """The module that defines MillerECoG2019 and its id helpers."""
+    import importlib
+    import sys
+
+    if from_brainsets:
+        try:
+            return importlib.import_module("brainsets.datasets.MillerECoG2019")
+        except ImportError as exc:
+            raise ImportError(
+                "--from-brainsets needs brainsets with "
+                "brainsets.datasets.MillerECoG2019 (for example the brainsets "
+                "fork branch miller-ecog-modularize)."
+            ) from exc
+    from imindbench.utils.pipeline_contracts import get_dataset_class
+
+    return sys.modules[get_dataset_class("millerecog2019").__module__]
+
+
+def subject_session_reader(module):
+    """Turn a recording id like sub-bp_set-motor_basic into (3, 1).
+
+    Only the module's subject and task-set tables are used; the id itself is
+    split by iMINDBench (see split_miller_recording_id).
+    """
+
+    from imindbench.utils.data_adapter import split_miller_recording_id
+
+    def subject_session_for(recording_id: str) -> tuple[int, int]:
+        code, task_set = split_miller_recording_id(recording_id)
+        return module.subject_number_for(code), module.session_number_for(task_set)
+
+    return subject_session_for
 
 
 def read_recordings(data_dir: Path, *, subject_session_for) -> list[dict]:
@@ -168,15 +210,19 @@ def main(argv=None) -> int:
         default=Path(__file__).resolve().parent / "millerecog2019",
     )
     parser.add_argument("--min-position-channels", type=int, default=1)
+    parser.add_argument(
+        "--from-brainsets",
+        action="store_true",
+        help=(
+            "Read the subject and task-set tables from "
+            "brainsets.datasets.MillerECoG2019 instead of torch_brain.datasets"
+        ),
+    )
     args = parser.parse_args(argv)
 
-    from imindbench.utils.data_adapter import _subject_session_from_recording_id
-
+    module = miller_dataset_module(from_brainsets=args.from_brainsets)
     recordings = read_recordings(
-        args.data_dir,
-        subject_session_for=lambda rid: _subject_session_from_recording_id(
-            recording_id=rid, dataset_provider="millerecog2019"
-        ),
+        args.data_dir, subject_session_for=subject_session_reader(module)
     )
     lists = build_lists(recordings, min_position_channels=args.min_position_channels)
     args.out_dir.mkdir(parents=True, exist_ok=True)
