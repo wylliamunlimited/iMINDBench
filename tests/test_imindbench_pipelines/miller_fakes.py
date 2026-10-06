@@ -69,7 +69,9 @@ SUBJECT_CODES = (
 )  # fmt: skip
 TALAIRACH_SETS = {"motor_basic", "imagery_basic", "imagery_feedback", "memory_nback"}
 
-_RECORDING_ID_RE = re.compile(r"^sub-(?P<subject>[a-z]{2})_set-(?P<dset>[a-z_0-9]+)$")
+# The same pattern as the real module. It does not allow digits, so it
+# rejects the regression task sets; iMINDBench must not rely on it.
+_RECORDING_ID_RE = re.compile(r"^sub-(?P<subject>[a-z]{2})_set-(?P<dset>[a-z_]+)$")
 
 
 def _from_recording_id(recording_id: str) -> tuple[str, str]:
@@ -145,6 +147,7 @@ class FakeMillerECoG2019:
         subject_code = SUBJECT_CODES[int(test_subject) - 1]
         self.task_set = SETS[int(test_session) - 1]
         self.recording_ids = [recording_id_for(subject_code, self.task_set)]
+        self.subject_code = subject_code
         self.read_count = 0
 
     @classmethod
@@ -234,7 +237,7 @@ class FakeMillerECoG2019:
         duration = float(starts[-1] + self.window_sec + 0.5)
         n_samples = int(round(duration * self.sampling_rate_hz))
         t = np.arange(n_samples) / self.sampling_rate_hz
-        rng = np.random.default_rng(subject_number_for(recording_id[4:6]))
+        rng = np.random.default_rng(subject_number_for(self.subject_code))
         signal = 0.1 * rng.standard_normal((n_samples, self.n_channels))
         if self.is_regression:
             signal[:, 0] += self._continuous_target(t)
