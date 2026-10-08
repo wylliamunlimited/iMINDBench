@@ -23,6 +23,10 @@ provider: millerecog2019
 window_slicing_policy: ceil  # ceil | legacy_floor
 subset_tier: full
 label_mode: binary  # binary|multiclass
+# class_pair: [a, b] keeps only the windows of stored labels a and b of a
+# multiclass task and scores them as a binary task, with b as the positive
+# class. Needs label_mode: multiclass. null scores the task as usual.
+class_pair: null
 task: move_vs_rest
 test_subject: 3
 test_session: 1
@@ -38,3 +42,16 @@ destrieux_brain_area_key: label_destrieux  # Selected by BaRISTA.
 uniquify_channel_ids_with_subject: true
 uniquify_channel_ids_with_session: true
 merge_val_into_test: false
+# fold_subset: [0] runs only the listed folds; null runs every fold. Task set 25
+# (fingerflex_reg_w1000h25b) has only fold 0, so it must be run with [0].
+fold_subset: null
+# Matched train subsets: keep exactly the train windows listed in a JSON file
+# instead of all of them. The file is keyed by "<task>_sub<S>_sess<E>_fold<F>";
+# _frac and _draw pick one subset, and _order_seed is the seed of the run the
+# subsets were computed on. The file stores the number of train windows and a
+# checksum of their labels, and the run stops if they do not match. A fold
+# whose draw is absent from the file is recorded as skipped. null disables this.
+train_sample_indices_file: null
+train_sample_indices_frac: null
+train_sample_indices_draw: null
+train_sample_indices_order_seed: 42

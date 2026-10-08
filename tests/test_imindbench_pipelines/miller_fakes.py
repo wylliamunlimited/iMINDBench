@@ -12,6 +12,8 @@ brainsets/datasets/MillerECoG2019.py):
   coordinate frames, plus ``mni152`` and ``mni152_strict`` when the build has
   positions; ``mni152_strict`` is NaN for channels whose position quality is "C"
 - ``num_folds_for_regime("within-session")`` returns 2
+- ``class_pair=(a, b)`` keeps only windows of stored labels a and b and
+  relabels them 0 / 1 with b as class 1
 
 The signal is synthetic: channel 0 carries a sine wave whose amplitude
 depends on the window's label, so a simple model can separate the classes.
@@ -105,6 +107,7 @@ class FakeMillerECoG2019:
         test_session=None,
         split=None,
         label_mode=None,
+        class_pair=None,
         task=None,
         regime=None,
         fold=None,
@@ -123,6 +126,11 @@ class FakeMillerECoG2019:
         self.dirname = dirname
         self.subset_tier = subset_tier
         self.label_mode = label_mode or "binary"
+        if class_pair is not None:
+            class_pair = tuple(int(label) for label in class_pair)
+            if len(class_pair) != 2 or class_pair[0] == class_pair[1]:
+                raise ValueError(f"Invalid class_pair {class_pair!r}.")
+        self.class_pair = class_pair
         self.task = task
         self.regime = regime
         self.fold = int(fold)
@@ -140,15 +148,19 @@ class FakeMillerECoG2019:
         return 2
 
     # ---- windows -------------------------------------------------------------
+    @property
+    def n_classes(self) -> int:
+        return 3 if self.label_mode == "multiclass" else 2
+
     def _all_windows(self) -> tuple[np.ndarray, np.ndarray]:
-        n = 2 * self.windows_per_class
+        n = self.n_classes * self.windows_per_class
         starts = 0.1 + np.arange(n, dtype=np.float64) * (self.window_sec + 0.1)
-        labels = np.arange(n, dtype=np.int64) % 2
+        labels = np.arange(n, dtype=np.int64) % self.n_classes
         return starts, labels
 
     def _split_positions(self) -> np.ndarray:
         """Two chronological folds: the test half, its first half as val."""
-        n = 2 * self.windows_per_class
+        n = self.n_classes * self.windows_per_class
         first, second = np.arange(n // 2), np.arange(n // 2, n)
         held_out = second if self.fold == 0 else first
         train = first if self.fold == 0 else second
@@ -158,6 +170,9 @@ class FakeMillerECoG2019:
     def get_sampling_intervals(self) -> dict[str, Interval]:
         starts, labels = self._all_windows()
         keep = self._split_positions()
+        if self.class_pair is not None:
+            keep = keep[np.isin(labels[keep], self.class_pair)]
+            labels = (labels == self.class_pair[1]).astype(np.int64)
         return {
             self.recording_ids[0]: Interval(
                 start=starts[keep],
@@ -228,6 +243,7 @@ class FakeMillerECoG2019:
             "task": self.task,
             "fold": self.fold,
             "split": self.split,
+            "class_pair": self.class_pair,
         }
 
 
