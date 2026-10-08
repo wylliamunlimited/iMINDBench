@@ -1,0 +1,13 @@
+# Miller version of wav_hpf_robust_1000to500Hz: resample to 500 Hz, then global
+# robust scalar standardization.
+# The Miller ECoG library stores its signal at 1000 Hz after a 0.5 Hz high-pass
+# filter, notch filters at 60, 120 and 180 Hz, and re-referencing. So this chain
+# leaves out the filtering, the context window, the crop and the Laplacian
+# re-referencing that the matching non-Miller preset does.
+chain:
+  - name: resample
+    source_rate: 1000
+    target_rate: 500
+
+  - name: standardize
+    mode: global_robust_scalar

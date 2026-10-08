@@ -4,6 +4,8 @@
 import numpy as np
 from omegaconf import DictConfig
 
+from imindbench.utils.pipeline_contracts import provider_property
+
 from . import register_model
 from .torch_base_model import TorchBaseModel
 
@@ -52,40 +54,18 @@ class DIVERModel(TorchBaseModel):
         return patched_input
 
     def _get_data_info_list(self, B, C, coords, provider):
+        # The dataset list says which electrode type each dataset records with.
+        coord_subtype = provider_property(provider, "electrode_subtype")
         data_info_list = []
         for idx in range(B):
+            data_info_dict = {}
             if coords is None:
-                data_info_dict = {}
-                data_info_dict["modality"] = "iEEG"
                 data_info_dict["xyz_id"] = np.full((C, 3), np.nan)
-                if provider in [
-                    "neuroprobe2025",
-                    "neuroprobev2",
-                    "kelesbyd2024",
-                    "berezutskayapippi2022",
-                ]:
-                    data_info_dict["coord_subtype"] = ["depth" for i in range(C)]
-                else:
-                    raise NotImplementedError(
-                        f"Unknown provider {provider}. only supported providers are neuroprobe, byd, and pippi."
-                    )
-                data_info_list.append(data_info_dict)
             else:
-                data_info_dict = {}
                 data_info_dict["xyz_id"] = coords[idx]
-                data_info_dict["modality"] = "iEEG"
-                if provider in [
-                    "neuroprobe2025",
-                    "neuroprobev2",
-                    "kelesbyd2024",
-                    "berezutskayapippi2022",
-                ]:
-                    data_info_dict["coord_subtype"] = ["depth" for i in range(C)]
-                else:
-                    raise NotImplementedError(
-                        f"Unknown provider {provider}. only supported providers are neuroprobe, byd, and pippi."
-                    )
-                data_info_list.append(data_info_dict)
+            data_info_dict["modality"] = "iEEG"
+            data_info_dict["coord_subtype"] = [coord_subtype for _ in range(C)]
+            data_info_list.append(data_info_dict)
         return data_info_list
 
     def prepare_batch(self, batch, **kwargs):
@@ -99,14 +79,12 @@ class DIVERModel(TorchBaseModel):
         provider = (
             None if self.dataset_cfg is None else self.dataset_cfg.get("provider", None)
         )
-        if provider in ["neuroprobe2025", "neuroprobev2"]:  # uV scales
-            x = x / 200.0  # 200.0 is diver scaling factor for ieeg
-        elif provider in ["berezutskayapippi2022", "kelesbyd2024"]:  # V scales
-            x = x * 1e6 / 200.0  # 200.0 is diver scaling factor for ieeg
+        # 200.0 is DIVER's scaling factor for iEEG in microvolts. Datasets that
+        # store volts are converted to microvolts first.
+        if provider_property(provider, "signal_unit") == "V":
+            x = x * 1e6 / 200.0
         else:
-            raise NotImplementedError(
-                f"Unknown provider {provider}. only supported providers are neuroprobe2025, neuroprobev2, berezutskayapippi2022, and kelesbyd2024."
-            )
+            x = x / 200.0
 
         coords = batch.get("channel_coords")
 

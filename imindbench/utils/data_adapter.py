@@ -9,6 +9,7 @@ import json
 import pickle
 import re
 import shutil
+import sys
 import tempfile
 import time
 import uuid
@@ -27,6 +28,7 @@ from imindbench.utils.logging_utils import log, log_fold_split_sample_counts
 from imindbench.utils.pipeline_contracts import (
     AUTO_MAX_TRAIN_SAMPLES_PER_SUBJECT,
     build_processed_split_provider,
+    get_dataset_class,
     needs_region_intersection_pool,
     resolve_train_source_configs,
     validate_decodable_train_source_regimes,
@@ -98,18 +100,51 @@ def no_coordinates(coords: Any) -> None:
     return None
 
 
+def zero_coordinates(coords: Any) -> np.ndarray:
+    """Place every channel at the origin.
+
+    Used by the popt_zero profile so models that require coordinates (PopT,
+    BaRISTA) can run on recordings that have no usable positions. Every
+    channel gets the same position, so the model learns nothing from it.
+    """
+    coords = np.asarray(coords, dtype=np.float32).reshape(-1, 3)
+    return np.zeros_like(coords)
+
+
 COORDINATE_PROFILES: dict[str, dict[str, tuple[str, Any]]] = {
     "popt_lip": {
+        "millerecog2019": ("talairach", no_coordinates),
         "kelesbyd2024": ("byd_mni152_ras", byd_mni152_ras_to_popt_lip),
         "berezutskayapippi2022": ("acpc", pippi_acpc_to_popt_lip),
         "neuroprobe2025": ("btb_lip", identity),
         "neuroprobev2": ("btb_lip", identity),
     },
     "diver_mni": {
+        "millerecog2019": ("talairach", no_coordinates),
         "kelesbyd2024": ("byd_mni152_ras", no_coordinates),
         "berezutskayapippi2022": ("acpc", no_coordinates),
         "neuroprobe2025": ("btb_xyz", identity),
         "neuroprobev2": ("btb_xyz", identity),
+    },
+    # The profiles below exist for millerecog2019 only. Selecting one of them
+    # for another dataset fails with "has no mapping for provider".
+    #
+    # popt_zero: every channel at the origin. This is the Miller default, so
+    # PopT and BaRISTA run on the build without positions.
+    "popt_zero": {
+        "millerecog2019": ("talairach", zero_coordinates),
+    },
+    # popt_miller: real positions for PopT and BaRISTA. Needs the Miller build
+    # with MNI152 positions. mni152_strict marks low-quality positions as NaN,
+    # and channels with NaN positions are dropped, so pair this profile with
+    # the positions cell list. Miller's MNI152 millimetres are the same frame
+    # KelesBYD2024 uses, so the BYD transform applies unchanged.
+    "popt_miller": {
+        "millerecog2019": ("mni152_strict", byd_mni152_ras_to_popt_lip),
+    },
+    # diver_mni_miller: the same MNI152 positions, passed to DIVER unchanged.
+    "diver_mni_miller": {
+        "millerecog2019": ("mni152_strict", identity),
     },
 }
 
@@ -836,11 +871,57 @@ def _normalize_max_train_samples_per_subject_setting(
     return _normalize_max_train_samples_per_subject(value)
 
 
+_MILLER_RECORDING_ID_RE = re.compile(
+    r"^sub-(?P<subject>[a-z]{2})_set-(?P<task_set>[a-z][a-z0-9_]*)$"
+)
+
+
+def split_miller_recording_id(recording_id: str) -> tuple[str, str]:
+    """Split a Miller recording id into (subject code, task set).
+
+    Read here rather than with the dataset module's own pattern, because that
+    pattern (brainsets fork, miller-ecog-modularize) does not allow digits and
+    so rejects the regression task sets, for example fingerflex_reg_w1000.
+    """
+    match = _MILLER_RECORDING_ID_RE.fullmatch(
+        _strip_optional_source_prefix(recording_id)
+    )
+    if match is None:
+        raise ValueError(f"Invalid MillerECoG2019 recording_id '{recording_id}'.")
+    return match.group("subject"), match.group("task_set")
+
+
+def _miller_subject_session(recording_id: str) -> tuple[int, int]:
+    """Turn a Miller recording id into (subject number, session number).
+
+    Miller ids use letter codes, for example ``sub-bp_set-motor_basic``. The
+    dataset module turns the subject code into its position in the list of
+    29 subject codes and the task set into its position in the list of 25
+    task sets, both counted from 1. The task set plays the role of the
+    session.
+    """
+    dataset_cls = get_dataset_class("millerecog2019")
+    module = sys.modules[dataset_cls.__module__]
+    code, task_set = split_miller_recording_id(recording_id)
+    return module.subject_number_for(code), module.session_number_for(task_set)
+
+
+# Datasets whose recording ids are not numbers that a regular expression can
+# read. Each parser returns (subject, session) and is checked before the
+# regular-expression tables above.
+_RECORDING_ID_PARSERS: dict[str, Any] = {
+    "millerecog2019": _miller_subject_session,
+}
+
+
 def _subject_from_recording_id(
     *,
     recording_id: str,
     dataset_provider: str,
 ) -> int:
+    parser = _RECORDING_ID_PARSERS.get(dataset_provider)
+    if parser is not None:
+        return parser(recording_id)[0]
     pattern = _SUBJECT_FROM_RECORDING_ID_PATTERNS.get(dataset_provider)
     if pattern is None:
         raise ValueError(
@@ -867,6 +948,9 @@ def _subject_session_from_recording_id(
     recording_id: str,
     dataset_provider: str,
 ) -> tuple[int, int]:
+    parser = _RECORDING_ID_PARSERS.get(dataset_provider)
+    if parser is not None:
+        return parser(recording_id)
     pattern = _SUBJECT_SESSION_FROM_RECORDING_ID_PATTERNS.get(dataset_provider)
     if pattern is None:
         raise ValueError(

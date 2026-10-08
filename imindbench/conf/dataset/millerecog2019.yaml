@@ -1,0 +1,57 @@
+# Processed-mode dataset configuration for Kai Miller's ECoG library (2019),
+# prepared by the brainsets pipeline miller_ecog_library_2019.
+#
+# One recording is one subject doing one task set. iMINDBench calls the task set
+# the "session", so test_session picks the task set and test_subject picks the
+# subject. Both are positions in fixed lists, counted from 1.
+#
+# test_session (task set):
+#    1 motor_basic            2 imagery_basic          3 imagery_feedback
+#    4 fingerflex             5 gestures               6 speech_basic
+#    7 speech_lists           8 visual_search          9 faces_basic
+#   10 faces_noise           11 memory_nback          12 faces_localizer
+#   Regression sets (continuous targets, no classes):
+#   13 fingerflex_reg_w1000  14 fingerflex_reg_w500   15 fingerflex_reg_w250
+#   16 joystick_track_w1000  17 joystick_track_w500   18 joystick_track_w250
+#   19 mouse_track_w1000     20 mouse_track_w500      21 mouse_track_w250
+#   22 fingerflex_reg_w1000h50   23 joystick_track_w1000h50
+#   24 mouse_track_w1000h50      25 fingerflex_reg_w1000h25b (one fold only)
+#   The w1000 / w500 / w250 suffix is the window length in milliseconds. The
+#   h50 / h25 sets slide the window in 50 or 25 ms steps.
+#
+# test_subject (2-letter subject code):
+#    1 al   2 ap   3 bp   4 ca   5 cc   6 de   7 fp   8 gc   9 gf  10 ha
+#   11 hh  12 hl  13 ht  14 in  15 ja  16 jc  17 jf  18 jm  19 jp  20 jt
+#   21 mv  22 rh  23 rn  24 rr  25 ug  26 wc  27 wm  28 ww  29 zt
+#
+# Not every subject did every task set, and each task set has its own tasks.
+# The run script uses cell lists (launcher option --cells) so it only runs the
+# task/subject/session combinations that exist.
+#
+# The stored signal is already filtered and re-referenced at 1000 Hz, so use the
+# miller_* preprocessor presets. They do no re-referencing.
+root: ${paths.dataset_root}
+dirname: miller_ecog_library_2019
+provider: millerecog2019
+window_slicing_policy: ceil  # ceil | legacy_floor
+subset_tier: full
+label_mode: binary  # binary|multiclass
+task: move_vs_rest
+test_subject: 3
+test_session: 1
+regime: within-session  # The only regime: each recording is evaluated on its own.
+# popt_zero gives every channel the position (0, 0, 0), so PopT and BaRISTA run
+# on the build without positions. DIVER's model config replaces this with
+# diver_mni, which gives Miller no coordinates. For real positions use
+# millerecog2019_pos.
+coordinate_profile: popt_zero  # popt_zero|popt_lip|diver_mni
+train_same_subject_only: false
+# Fraction of train windows to keep via random subsampling per fold (0, 1].
+train_sample_fraction: 1.0
+max_train_samples_per_subject: null
+decodable_subject_sessions_only: false
+brain_area_key: null
+destrieux_brain_area_key: label_destrieux  # Selected by BaRISTA.
+uniquify_channel_ids_with_subject: true
+uniquify_channel_ids_with_session: true
+merge_val_into_test: false

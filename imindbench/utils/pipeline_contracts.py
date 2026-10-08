@@ -75,6 +75,19 @@ def _require_torch_brain_berezutskaya_pippi_2022():
     return BerezutskayaPippi2022
 
 
+def _require_torch_brain_miller_ecog_2019():
+    # Import lazily so local tooling/tests that do not instantiate datasets can
+    # still import this module without optional data dependencies installed.
+    try:
+        from torch_brain.datasets import MillerECoG2019
+    except ImportError as exc:
+        raise ImportError(
+            "Processed provider 'millerecog2019' requires torch_brain.datasets "
+            "with MillerECoG2019."
+        ) from exc
+    return MillerECoG2019
+
+
 # =========================
 # Routing
 # =========================
@@ -83,6 +96,9 @@ def _require_torch_brain_berezutskaya_pippi_2022():
 # a small localized patch instead of scattering provider checks across helpers.
 _PROVIDER_SPECS: dict[str, dict[str, Any]] = {
     "neuroprobev2": {
+        # Unit of the stored signal and the electrode type DIVER is told about.
+        "signal_unit": "uV",
+        "electrode_subtype": "depth",
         "dataset_class_loader": _require_torch_brain_neuroprobe_v2,
         "regime_is_multi_subject": {
             "within-session": False,
@@ -92,6 +108,8 @@ _PROVIDER_SPECS: dict[str, dict[str, Any]] = {
         },
     },
     "neuroprobe2025": {
+        "signal_unit": "uV",
+        "electrode_subtype": "depth",
         "dataset_class_loader": _require_torch_brain_neuroprobe2025,
         "regime_is_multi_subject": {
             "SS-SM": False,
@@ -101,6 +119,8 @@ _PROVIDER_SPECS: dict[str, dict[str, Any]] = {
         "valid_subset_tiers": {"full", "lite", "nano"},
     },
     "kelesbyd2024": {
+        "signal_unit": "V",
+        "electrode_subtype": "depth",
         "dataset_class_loader": _require_torch_brain_keles_byd_2024,
         "regime_is_multi_subject": {
             "within-session": False,
@@ -111,6 +131,8 @@ _PROVIDER_SPECS: dict[str, dict[str, Any]] = {
         "valid_subset_tiers": {"full"},
     },
     "berezutskayapippi2022": {
+        "signal_unit": "V",
+        "electrode_subtype": "depth",
         "dataset_class_loader": _require_torch_brain_berezutskaya_pippi_2022,
         "regime_is_multi_subject": {
             "within-session": False,
@@ -120,12 +142,43 @@ _PROVIDER_SPECS: dict[str, dict[str, Any]] = {
         },
         "valid_subset_tiers": {"full", "high-cov", "low-cov"},
     },
+    # Kai Miller's ECoG library (2019). One recording is one subject doing one
+    # task set, so only within-session evaluation exists. The stored signal is
+    # in microvolts and comes from ECoG grids and strips.
+    "millerecog2019": {
+        "signal_unit": "uV",
+        "electrode_subtype": "grid",
+        "dataset_class_loader": _require_torch_brain_miller_ecog_2019,
+        "regime_is_multi_subject": {
+            "within-session": False,
+        },
+        "valid_subset_tiers": {"full"},
+    },
 }
 
 
 def _get_provider_spec(provider: str) -> dict[str, Any]:
     """Return the canonical provider spec for a validated provider key."""
     return _PROVIDER_SPECS[provider]
+
+
+def provider_property(provider: Any, key: str) -> Any:
+    """Return one value from a dataset's entry in the dataset list.
+
+    Used for per-dataset facts such as ``signal_unit`` and
+    ``electrode_subtype`` so callers do not have to check dataset names.
+    Raises ``NotImplementedError`` for an unknown dataset and ``KeyError`` when
+    the dataset entry does not set ``key``.
+    """
+    if provider not in _PROVIDER_SPECS:
+        raise NotImplementedError(
+            f"Unknown dataset provider {provider!r}. Known providers: "
+            f"{sorted(_PROVIDER_SPECS)}."
+        )
+    spec = _get_provider_spec(provider)
+    if key not in spec:
+        raise KeyError(f"Dataset provider {provider!r} does not set {key!r}.")
+    return spec[key]
 
 
 def is_multi_subject(provider: str, regime: str) -> bool:
@@ -266,7 +319,14 @@ def build_processed_split_provider(
 
 VALID_LABEL_MODES = {"binary", "multiclass"}
 VALID_SUBSET_TIERS = {"full", "lite", "nano"}
-VALID_COORDINATE_PROFILES = {"popt_lip", "diver_mni"}
+VALID_COORDINATE_PROFILES = {
+    "popt_lip",
+    "diver_mni",
+    # The three profiles below cover millerecog2019 only.
+    "popt_zero",
+    "popt_miller",
+    "diver_mni_miller",
+}
 
 
 def _validate_label_mode(label_mode: str) -> None:
