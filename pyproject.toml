@@ -53,6 +53,8 @@ imindbench = [
     "conf/**/*.yaml",
     "decodable_subject_sessions/**/*.json",
     "decodable_subject_sessions/**/README.md",
+    "cell_manifests/**/*.json",
+    "cell_manifests/README.md",
 ]
 
 [tool.ruff]
