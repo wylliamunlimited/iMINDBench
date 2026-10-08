@@ -1,0 +1,20 @@
+{
+ "dataset": "millerecog2019",
+ "list": "controls_binary",
+ "label_mode": "binary",
+ "description": "Control task fixation_vs_task (task set 11): baseline fixation is the first and last 130 s of the session, so the label follows time. Not a decoding result.",
+ "source": [
+  "millerecog2019_pr19_nback.json"
+ ],
+ "n_cells": 3,
+ "tasks": {
+  "fixation_vs_task": {
+   "subject_sessions": [
+    "sub4_sess11",
+    "sub5_sess11",
+    "sub25_sess11"
+   ],
+   "n_subject_sessions": 3
+  }
+ }
+}

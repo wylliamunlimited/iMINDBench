@@ -1,0 +1,129 @@
+{
+ "dataset": "millerecog2019",
+ "list": "regression",
+ "label_mode": "regression",
+ "description": "Regression targets of task sets 13, 16 and 19 (1.0 s windows, tiled).",
+ "source": [
+  "millerecog2019_pr19_tracking_w1000.json"
+ ],
+ "n_cells": 72,
+ "tasks": {
+  "cursor_vx": {
+   "subject_sessions": [
+    "sub7_sess16",
+    "sub7_sess19",
+    "sub9_sess16",
+    "sub9_sess19",
+    "sub22_sess16",
+    "sub22_sess19",
+    "sub24_sess16",
+    "sub24_sess19"
+   ],
+   "n_subject_sessions": 8
+  },
+  "cursor_vy": {
+   "subject_sessions": [
+    "sub7_sess16",
+    "sub7_sess19",
+    "sub9_sess16",
+    "sub9_sess19",
+    "sub22_sess16",
+    "sub22_sess19",
+    "sub24_sess16",
+    "sub24_sess19"
+   ],
+   "n_subject_sessions": 8
+  },
+  "flex_index": {
+   "subject_sessions": [
+    "sub3_sess13",
+    "sub5_sess13",
+    "sub13_sess13",
+    "sub16_sess13",
+    "sub19_sess13",
+    "sub26_sess13",
+    "sub27_sess13",
+    "sub29_sess13"
+   ],
+   "n_subject_sessions": 8
+  },
+  "flex_little": {
+   "subject_sessions": [
+    "sub3_sess13",
+    "sub5_sess13",
+    "sub13_sess13",
+    "sub16_sess13",
+    "sub19_sess13",
+    "sub26_sess13",
+    "sub27_sess13",
+    "sub29_sess13"
+   ],
+   "n_subject_sessions": 8
+  },
+  "flex_middle": {
+   "subject_sessions": [
+    "sub3_sess13",
+    "sub5_sess13",
+    "sub13_sess13",
+    "sub16_sess13",
+    "sub19_sess13",
+    "sub26_sess13",
+    "sub27_sess13",
+    "sub29_sess13"
+   ],
+   "n_subject_sessions": 8
+  },
+  "flex_ring": {
+   "subject_sessions": [
+    "sub3_sess13",
+    "sub5_sess13",
+    "sub13_sess13",
+    "sub16_sess13",
+    "sub19_sess13",
+    "sub26_sess13",
+    "sub27_sess13",
+    "sub29_sess13"
+   ],
+   "n_subject_sessions": 8
+  },
+  "flex_thumb": {
+   "subject_sessions": [
+    "sub3_sess13",
+    "sub5_sess13",
+    "sub13_sess13",
+    "sub16_sess13",
+    "sub19_sess13",
+    "sub26_sess13",
+    "sub27_sess13",
+    "sub29_sess13"
+   ],
+   "n_subject_sessions": 8
+  },
+  "target_x": {
+   "subject_sessions": [
+    "sub7_sess16",
+    "sub7_sess19",
+    "sub9_sess16",
+    "sub9_sess19",
+    "sub22_sess16",
+    "sub22_sess19",
+    "sub24_sess16",
+    "sub24_sess19"
+   ],
+   "n_subject_sessions": 8
+  },
+  "target_y": {
+   "subject_sessions": [
+    "sub7_sess16",
+    "sub7_sess19",
+    "sub9_sess16",
+    "sub9_sess19",
+    "sub22_sess16",
+    "sub22_sess19",
+    "sub24_sess16",
+    "sub24_sess19"
+   ],
+   "n_subject_sessions": 8
+  }
+ }
+}

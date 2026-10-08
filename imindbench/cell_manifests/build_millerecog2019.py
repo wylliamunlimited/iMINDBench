@@ -27,23 +27,28 @@ What it does, step by step:
    the launcher's --cells option reads.
 
 Lists:
-  binary.json, multiclass.json   classification cells of task sets 1-10
-                                 (the main Miller table)
-  new_sets_binary.json,          classification cells of task sets 11-12,
-  new_sets_multiclass.json       without the control tasks
+  binary.json, multiclass.json   classification cells of task sets 1-8: the
+                                 178-cell Miller table (153 binary + 25
+                                 multiclass)
+  positions_binary.json,         cells of binary.json / multiclass.json whose
+  positions_multiclass.json      recording keeps at least
+                                 --min-position-channels channels with a good
+                                 (quality A or B) MNI152 position; written
+                                 only when the files carry positions
+  class_pair_<a>v<b>.json        cells of multiclass.json with more than b
+                                 classes; run with dataset.class_pair=[a,b]
+  new_sets_binary.json,          classification cells of task sets 10-11
+  new_sets_multiclass.json       (1.0 s windows), without the control tasks
+  faces08_binary.json            classification cells of task sets 9 and 12
+                                 (0.8 s windows)
   controls_binary.json,          the control tasks
   controls_multiclass.json
-  class_pair_<a>v<b>.json        multiclass cells of task sets 1-12 (no
-                                 controls) that have classes a and b; run
-                                 with dataset.class_pair=[a,b]
-  regression.json                regression cells of task sets 13-21
-  regression_sliding.json        regression cells of task sets 22-24
-  regression_bci4.json           regression cells of task set 25
-  positions.json                 cells of binary.json and multiclass.json
-                                 whose recording keeps at least
-                                 --min-position-channels channels with a
-                                 good (quality A or B) MNI152 position;
-                                 written only when the files carry positions
+  regression.json                regression targets of task sets 13, 16, 19
+                                 (1.0 s windows)
+  regression_w500.json           task sets 14, 17, 20 (0.5 s windows)
+  regression_w250.json           task sets 15, 18, 21 (0.25 s windows)
+  regression_sliding.json        task sets 22-24 (sliding 1.0 s windows)
+  regression_bci4.json           task set 25
 
 The script prints the number of cells in each list.
 """
@@ -58,12 +63,19 @@ from pathlib import Path
 
 import numpy as np
 
-MAIN_SETS = range(1, 11)
-NEW_SETS = range(11, 13)
+# The 178-cell Miller table (153 binary + 25 multiclass) covers task sets 1-8.
+MAIN_SETS = range(1, 9)
+# Newer classification sets with 1.0 s windows: 10 faces_noise, 11 memory_nback.
+NEW_SETS = {10, 11}
+# Face sets with 0.8 s windows: 9 faces_basic, 12 faces_localizer. They need
+# 0.8 s preprocessing presets, which are not bundled, so they get their own list.
+FACES_08_SETS = {9, 12}
 REGRESSION_SETS = {
-    "regression": range(13, 22),
-    "regression_sliding": range(22, 25),
-    "regression_bci4": range(25, 26),
+    "regression": {13, 16, 19},
+    "regression_w500": {14, 17, 20},
+    "regression_w250": {15, 18, 21},
+    "regression_sliding": {22, 23, 24},
+    "regression_bci4": {25},
 }
 GOOD_POSITION_QUALITY = {"A", "B"}
 
@@ -163,20 +175,24 @@ def build_lists(recordings: list[dict], *, min_position_channels: int = 1) -> di
                 lists[label_mode][task].add(target)
                 positions = recording["good_position_channels"]
                 if positions is not None and positions >= min_position_channels:
-                    lists["positions"][task].add(target)
+                    lists[f"positions_{label_mode}"][task].add(target)
+                if label_mode == "multiclass":
+                    # A cell joins class_pair_<a>v<b> when it has more than b classes.
+                    for a, b in itertools.combinations(
+                        range(int(entry["n_classes"])), 2
+                    ):
+                        lists[f"class_pair_{a}v{b}"][task].add(target)
             elif session in NEW_SETS:
                 lists[f"new_sets_{label_mode}"][task].add(target)
-            else:
-                continue
-            if label_mode == "multiclass":
-                for a, b in itertools.combinations(range(int(entry["n_classes"])), 2):
-                    lists[f"class_pair_{a}v{b}"][task].add(target)
+            elif session in FACES_08_SETS:
+                lists[f"faces08_{label_mode}"][task].add(target)
         for entry in recording["regression"]:
             for name, sets in REGRESSION_SETS.items():
                 if session in sets:
                     lists[name][entry["target"]].add(target)
     if not has_positions:
-        lists.pop("positions", None)
+        for name in [name for name in lists if name.startswith("positions_")]:
+            lists.pop(name)
     return lists
 
 

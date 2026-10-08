@@ -56,6 +56,13 @@ def test_builder_sorts_cells_into_lists(tmp_path, monkeypatch, capsys):
         tasks=[],
         regression=[{"target": "flex_thumb"}],
     )
+    # sub2 / task set 9 (0.8 s face windows) and sub3 / task set 14 (0.5 s windows)
+    _write_h5(data / "sub-ap_set-faces_basic.h5", tasks=[_binary("face_vs_house")])
+    _write_h5(
+        data / "sub-bp_set-fingerflex_reg_w500.h5",
+        tasks=[],
+        regression=[{"target": "flex_thumb"}],
+    )
     _write_h5(
         data / "sub-bp_set-fingerflex_reg_w1000h25b.h5",
         tasks=[],
@@ -88,16 +95,16 @@ def test_builder_sorts_cells_into_lists(tmp_path, monkeypatch, capsys):
 
     assert cells("binary") == {"move_vs_rest": ["sub1_sess1", "sub3_sess1"]}
     assert cells("multiclass") == {"which_effector": ["sub3_sess1"]}
-    assert cells("positions") == {
-        "move_vs_rest": ["sub3_sess1"],
-        "which_effector": ["sub3_sess1"],
-    }
+    assert cells("positions_binary") == {"move_vs_rest": ["sub3_sess1"]}
+    assert cells("positions_multiclass") == {"which_effector": ["sub3_sess1"]}
     assert cells("new_sets_binary") == {"nback_vs_rest": ["sub3_sess11"]}
     assert cells("controls_binary") == {"fixation_vs_task": ["sub3_sess11"]}
     for pair in ("0v1", "0v2", "1v2"):
         assert cells(f"class_pair_{pair}") == {"which_effector": ["sub3_sess1"]}
     assert cells("regression") == {"flex_thumb": ["sub3_sess13"]}
     assert cells("regression_bci4") == {"flex_thumb": ["sub3_sess25"]}
+    assert cells("regression_w500") == {"flex_thumb": ["sub3_sess14"]}
+    assert cells("faces08_binary") == {"face_vs_house": ["sub2_sess9"]}
     assert not (out / "regression_sliding.json").exists()
     assert "binary: 2 cells, 1 tasks, 2 recordings" in capsys.readouterr().out
 
@@ -110,7 +117,7 @@ def test_positions_list_is_skipped_without_positions(tmp_path, monkeypatch):
     out = tmp_path / "lists"
     builder.main(["--data-dir", str(data), "--out-dir", str(out)])
     assert (out / "binary.json").exists()
-    assert not (out / "positions.json").exists()
+    assert not list(out.glob("positions_*.json"))
 
 
 def test_from_brainsets_reads_tables_from_the_brainsets_module(tmp_path, monkeypatch):

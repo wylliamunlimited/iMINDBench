@@ -1,0 +1,129 @@
+{
+ "dataset": "millerecog2019",
+ "list": "regression_sliding",
+ "label_mode": "regression",
+ "description": "Regression targets of task sets 22-24 (1.0 s windows sliding in 50 ms steps). Run with dataset.regression_target_last_samples=2.",
+ "source": [
+  "millerecog2019_pr19_tracking_w1000h50.json"
+ ],
+ "n_cells": 72,
+ "tasks": {
+  "cursor_vx": {
+   "subject_sessions": [
+    "sub7_sess23",
+    "sub7_sess24",
+    "sub9_sess23",
+    "sub9_sess24",
+    "sub22_sess23",
+    "sub22_sess24",
+    "sub24_sess23",
+    "sub24_sess24"
+   ],
+   "n_subject_sessions": 8
+  },
+  "cursor_vy": {
+   "subject_sessions": [
+    "sub7_sess23",
+    "sub7_sess24",
+    "sub9_sess23",
+    "sub9_sess24",
+    "sub22_sess23",
+    "sub22_sess24",
+    "sub24_sess23",
+    "sub24_sess24"
+   ],
+   "n_subject_sessions": 8
+  },
+  "flex_index": {
+   "subject_sessions": [
+    "sub3_sess22",
+    "sub5_sess22",
+    "sub13_sess22",
+    "sub16_sess22",
+    "sub19_sess22",
+    "sub26_sess22",
+    "sub27_sess22",
+    "sub29_sess22"
+   ],
+   "n_subject_sessions": 8
+  },
+  "flex_little": {
+   "subject_sessions": [
+    "sub3_sess22",
+    "sub5_sess22",
+    "sub13_sess22",
+    "sub16_sess22",
+    "sub19_sess22",
+    "sub26_sess22",
+    "sub27_sess22",
+    "sub29_sess22"
+   ],
+   "n_subject_sessions": 8
+  },
+  "flex_middle": {
+   "subject_sessions": [
+    "sub3_sess22",
+    "sub5_sess22",
+    "sub13_sess22",
+    "sub16_sess22",
+    "sub19_sess22",
+    "sub26_sess22",
+    "sub27_sess22",
+    "sub29_sess22"
+   ],
+   "n_subject_sessions": 8
+  },
+  "flex_ring": {
+   "subject_sessions": [
+    "sub3_sess22",
+    "sub5_sess22",
+    "sub13_sess22",
+    "sub16_sess22",
+    "sub19_sess22",
+    "sub26_sess22",
+    "sub27_sess22",
+    "sub29_sess22"
+   ],
+   "n_subject_sessions": 8
+  },
+  "flex_thumb": {
+   "subject_sessions": [
+    "sub3_sess22",
+    "sub5_sess22",
+    "sub13_sess22",
+    "sub16_sess22",
+    "sub19_sess22",
+    "sub26_sess22",
+    "sub27_sess22",
+    "sub29_sess22"
+   ],
+   "n_subject_sessions": 8
+  },
+  "target_x": {
+   "subject_sessions": [
+    "sub7_sess23",
+    "sub7_sess24",
+    "sub9_sess23",
+    "sub9_sess24",
+    "sub22_sess23",
+    "sub22_sess24",
+    "sub24_sess23",
+    "sub24_sess24"
+   ],
+   "n_subject_sessions": 8
+  },
+  "target_y": {
+   "subject_sessions": [
+    "sub7_sess23",
+    "sub7_sess24",
+    "sub9_sess23",
+    "sub9_sess24",
+    "sub22_sess23",
+    "sub22_sess24",
+    "sub24_sess23",
+    "sub24_sess24"
+   ],
+   "n_subject_sessions": 8
+  }
+ }
+}

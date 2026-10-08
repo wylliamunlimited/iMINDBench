@@ -1,0 +1,21 @@
+{
+ "dataset": "millerecog2019",
+ "list": "controls_multiclass",
+ "label_mode": "multiclass",
+ "description": "Control task nback_level_3way (task set 11): the three n-back levels are contiguous blocks in fixed order, so the label follows time. Not a decoding result.",
+ "source": [
+  "millerecog2019_pr19_nback_multiclass.json"
+ ],
+ "n_cells": 4,
+ "tasks": {
+  "nback_level_3way": {
+   "subject_sessions": [
+    "sub1_sess11",
+    "sub4_sess11",
+    "sub5_sess11",
+    "sub25_sess11"
+   ],
+   "n_subject_sessions": 4
+  }
+ }
+}

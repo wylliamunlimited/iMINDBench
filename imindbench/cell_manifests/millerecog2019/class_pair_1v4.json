@@ -1,0 +1,34 @@
+{
+ "dataset": "millerecog2019",
+ "list": "class_pair_1v4",
+ "label_mode": "multiclass",
+ "description": "Cells of multiclass.json with at least 5 classes. Run with dataset.label_mode=multiclass and dataset.class_pair=[1,4]; class 1 becomes 0 and class 4 becomes 1.",
+ "source": [
+  "millerecog2019_pr19_multiclass.json"
+ ],
+ "n_cells": 12,
+ "tasks": {
+  "fingers_5way": {
+   "subject_sessions": [
+    "sub3_sess5",
+    "sub4_sess5",
+    "sub6_sess5",
+    "sub27_sess5"
+   ],
+   "n_subject_sessions": 4
+  },
+  "which_finger": {
+   "subject_sessions": [
+    "sub3_sess4",
+    "sub5_sess4",
+    "sub13_sess4",
+    "sub16_sess4",
+    "sub19_sess4",
+    "sub26_sess4",
+    "sub27_sess4",
+    "sub29_sess4"
+   ],
+   "n_subject_sessions": 8
+  }
+ }
+}

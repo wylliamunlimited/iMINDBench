@@ -1,0 +1,60 @@
+{
+ "dataset": "millerecog2019",
+ "list": "class_pair_0v3",
+ "label_mode": "multiclass",
+ "description": "Cells of multiclass.json with at least 4 classes. Run with dataset.label_mode=multiclass and dataset.class_pair=[0,3]; class 0 becomes 0 and class 3 becomes 1.",
+ "source": [
+  "millerecog2019_pr19_multiclass.json"
+ ],
+ "n_cells": 23,
+ "tasks": {
+  "direction_4way": {
+   "subject_sessions": [
+    "sub18_sess8",
+    "sub20_sess8",
+    "sub23_sess8",
+    "sub24_sess8",
+    "sub26_sess8"
+   ],
+   "n_subject_sessions": 5
+  },
+  "fingers_5way": {
+   "subject_sessions": [
+    "sub3_sess5",
+    "sub4_sess5",
+    "sub6_sess5",
+    "sub27_sess5"
+   ],
+   "n_subject_sessions": 4
+  },
+  "gesture_type": {
+   "subject_sessions": [
+    "sub3_sess5",
+    "sub4_sess5",
+    "sub27_sess5"
+   ],
+   "n_subject_sessions": 3
+  },
+  "runid_from_rest": {
+   "subject_sessions": [
+    "sub3_sess5",
+    "sub4_sess5",
+    "sub27_sess5"
+   ],
+   "n_subject_sessions": 3
+  },
+  "which_finger": {
+   "subject_sessions": [
+    "sub3_sess4",
+    "sub5_sess4",
+    "sub13_sess4",
+    "sub16_sess4",
+    "sub19_sess4",
+    "sub26_sess4",
+    "sub27_sess4",
+    "sub29_sess4"
+   ],
+   "n_subject_sessions": 8
+  }
+ }
+}

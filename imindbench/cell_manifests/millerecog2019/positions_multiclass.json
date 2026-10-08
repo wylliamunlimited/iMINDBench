@@ -1,0 +1,39 @@
+{
+ "dataset": "millerecog2019",
+ "list": "positions_multiclass",
+ "label_mode": "multiclass",
+ "description": "Cells of multiclass.json whose recording has trustworthy MNI152 positions (quality A or B). Run with dataset=millerecog2019_pos.",
+ "source": [
+  "millerecog2019_pr19_pos_tierAB_multiclass.json"
+ ],
+ "n_cells": 7,
+ "tasks": {
+  "fingers_5way": {
+   "subject_sessions": [
+    "sub3_sess5",
+    "sub6_sess5"
+   ],
+   "n_subject_sessions": 2
+  },
+  "gesture_type": {
+   "subject_sessions": [
+    "sub3_sess5"
+   ],
+   "n_subject_sessions": 1
+  },
+  "runid_from_rest": {
+   "subject_sessions": [
+    "sub3_sess5"
+   ],
+   "n_subject_sessions": 1
+  },
+  "which_finger": {
+   "subject_sessions": [
+    "sub3_sess4",
+    "sub19_sess4",
+    "sub26_sess4"
+   ],
+   "n_subject_sessions": 3
+  }
+ }
+}
