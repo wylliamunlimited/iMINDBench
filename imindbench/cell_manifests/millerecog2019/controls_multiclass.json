@@ -1,0 +1,5 @@
+{
+  "tasks": {
+    "nback_level_3way": {"subject_sessions": ["sub1_sess11", "sub4_sess11", "sub5_sess11", "sub25_sess11"]}
+  }
+}

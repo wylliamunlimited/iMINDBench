@@ -1,0 +1,9 @@
+{
+  "tasks": {
+    "noise_high_vs_low": {"subject_sessions": ["sub2_sess10", "sub4_sess10", "sub10_sess10", "sub15_sess10", "sub21_sess10", "sub26_sess10", "sub29_sess10"]},
+    "noisy_face_vs_house": {"subject_sessions": ["sub2_sess10", "sub4_sess10", "sub10_sess10", "sub15_sess10", "sub21_sess10", "sub26_sess10", "sub29_sess10"]},
+    "noisy_face_vs_house_le50": {"subject_sessions": ["sub2_sess10", "sub4_sess10", "sub10_sess10", "sub15_sess10", "sub21_sess10", "sub26_sess10", "sub29_sess10"]},
+    "pic_vs_blank": {"subject_sessions": ["sub1_sess11", "sub4_sess11", "sub5_sess11", "sub25_sess11"]},
+    "target_vs_nontarget": {"subject_sessions": ["sub1_sess11", "sub4_sess11", "sub5_sess11", "sub25_sess11"]}
+  }
+}

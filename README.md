@@ -46,8 +46,12 @@ brainsets prepare neuroprobe_2025 --raw-dir /path/to/raw --processed-dir /path/t
 | NeuroprobeV2 | `neuroprobe_2025` | `neuroprobev2` | 5 |
 | Bang! You're Dead | `keles_byd_2024` | `kelesbyd2024` | 29 |
 | PIPPI | `berezutskaya_pippi_2022` | `berezutskayapippi2022` | 5 |
+| Miller ECoG library (2019) | `miller_ecog_library_2019` | `millerecog2019` | 57 |
 
 Prepare each dataset into the same processed root to run the complete benchmark.
+Miller also needs a torch_brain that provides `torch_brain.datasets.MillerECoG2019`;
+the torch_brain version pinned above does not have it yet, and the pin will be
+updated when it does.
 Each pipeline creates its own named subdirectory. Neuroprobe2025 and NeuroprobeV2
 use the same prepared artifacts through different dataset views.
 
@@ -59,7 +63,7 @@ cp imindbench/conf/paths/example.yaml /path/to/config/paths/local.yaml
 ```
 
 Set `dataset_root: /path/to/processed` and `dataset_dirname: neuroprobe_2025`.
-BYD and PIPPI configs select their own subdirectories under that root. These two
+BYD, PIPPI and Miller configs select their own subdirectories under that root. These two
 fields are enough for the first baseline. Add checkpoint/cache paths only when
 needed; omitted optional resources inherit packaged `null` defaults.
 
@@ -84,9 +88,12 @@ We provide scripts to run for each dataset:
 | [run_neuroprobev2.sh](scripts/run_neuroprobev2.sh) | NeuroprobeV2: within-session, optional transfer and sample efficiency |
 | [run_kelesbyd2024.sh](scripts/run_kelesbyd2024.sh) | BYD: within-session and optional transfer |
 | [run_berezutskayapippi2022.sh](scripts/run_berezutskayapippi2022.sh) | PIPPI: within-session and optional transfer |
+| [run_millerecog2019.sh](scripts/run_millerecog2019.sh) | Miller: within-session main table and optional Miller tracks (see [Miller ECoG library](#miller-ecog-library)) |
 
 Open the script for your dataset. Each file lists all benchmark subject/session
-pairs and all 15 tasks; the default model is Logistic with multi-STFT inputs.
+pairs and all 15 tasks (Miller has its own tasks; see
+[Miller ECoG library](#miller-ecog-library)); the default model is Logistic
+with multi-STFT inputs.
 
 | Setting | Where to edit it |
 | --- | --- |
@@ -149,6 +156,63 @@ evaluations per model/input pairing**, before folds.
 - Applies no decodable-target filter.
 - Scripts own the task/target selections; coverage tests check that launch previews
   match those explicit lists.
+- Miller is counted separately: its main table has 178 cells (see below).
+
+### Miller ECoG library
+
+[run_millerecog2019.sh](scripts/run_millerecog2019.sh) runs Kai Miller's ECoG
+library (2019). It differs from the other scripts in four ways:
+
+1. **Cells instead of a full grid.** Each task set has its own tasks, and not
+   every subject did every task set. Every launch therefore passes
+   `--cells NAME`: the launcher builds the usual task × target grid, then keeps
+   only the pairs listed in
+   `imindbench/cell_manifests/millerecog2019/NAME.json`. See
+   [the cell-list README](imindbench/cell_manifests/README.md).
+2. **Numbering.** Targets are still `sub<S>_sess<T>`, but `T` is the task-set
+   number and `S` the subject number, both listed in
+   `imindbench/conf/dataset/millerecog2019.yaml`.
+3. **Inputs.** The stored signal is already filtered and re-referenced at
+   1000 Hz, so the script uses the `miller_*` preprocessor presets, which do no
+   filtering or re-referencing. Its table lists the 11 valid model/input
+   pairings.
+4. **Coordinates.** Miller recordings have no positions in the default build, so
+   `dataset.coordinate_profile` defaults to `popt_zero` (every channel at the
+   origin) for models that need coordinates.
+
+The default block runs the main table: **153 binary + 25 multiclass = 178
+cells per model/input pairing**, before folds. The commented blocks are
+optional tracks, each writing to its own output group:
+
+| Block | Cell list(s) | What it runs |
+| --- | --- | --- |
+| Within-session (default) | `binary`, `multiclass` | The main table, task sets 1-8 |
+| New task sets | `new_sets_binary` | Binary tasks of task sets 10 (faces_noise) and 11 (memory_nback) |
+| Controls | `controls_binary`, `controls_multiclass` | Tasks whose labels follow time in the session; report them apart, since a good score does not show decoding |
+| Class pairs | `class_pair_<a>v<b>` | Each multiclass cell scored on two classes at a time (`dataset.class_pair=[a,b]`; class b becomes the positive class) |
+| Regression | `regression` | Continuous targets (finger flexion, joystick and mouse tracking) of task sets 13, 16, 19; scored with Pearson r of the 40 Hz trajectory (`traj_r`) instead of AUROC |
+| Regression sliding | `regression_sliding` | Task sets 22-24, 1.0 s windows in 50 ms steps, each scored on its last 2 trajectory samples |
+| Regression BCI-IV | `regression_bci4` | Task set 25, the BCI Competition IV finger-flexion split (one fold) |
+| Positions | `positions_binary`, `positions_multiclass` | The main table with real MNI152 positions (`dataset=millerecog2019_pos`), only on recordings whose positions are trustworthy |
+
+Regression runs write `train/val/test_traj_r`, `_mean_r`, `_traj_mse` and
+`_traj_r2` per fold. Scikit-learn models fit a multi-output ridge regression;
+PyTorch models train with a mean-squared-error loss by default
+(`model.regression_head: trained_mse`). BrainBERT with a linear readout
+(`linear_baseline`), and DIVER with `flatten_linear` and `ft_mup: false`, can
+instead fit the final linear layer in closed form with
+`model.regression_head=ridge`.
+
+The positions block needs the Miller build whose H5 files carry MNI152
+positions. PopT-v2 and BaRISTA use `popt_miller` there; DIVER's model config
+sets its own profile, so the script adds
+`--set dataset.coordinate_profile=diver_mni_miller` for DIVER.
+
+Two more dataset options exist for Miller runs that are not in the script:
+`dataset.fold_subset=[...]` runs only the listed folds, and
+`dataset.train_sample_indices_file` keeps an exact, pre-computed subset of
+train windows per fold (see the comments in
+`imindbench/conf/dataset/millerecog2019.yaml`).
 
 <details>
 <summary>Smaller runs and cohort details</summary>
@@ -196,9 +260,12 @@ The bundled collection contains 18 presets: the 10 main input presets listed in
 the dataset scripts, plus 8 variants selected for the paper notebooks' final
 plots. Each additional family below has both `1000` and `2048` Hz versions; replace `{rate}`
 with the dataset's native rate (BYD: 1000; NeuroprobeV2 and PIPPI: 2048).
+Miller (1000 Hz) uses its own `miller_*` presets instead; see
+[Miller ECoG library](#miller-ecog-library).
 
-All bundled presets use Laplacian referencing, so filenames omit the
-`laplacian_` prefix. Spectral preset names are `stft_{rate}Hz`,
+All bundled presets except the `miller_*` presets use Laplacian referencing,
+so filenames omit the `laplacian_` prefix. The Miller signal is already
+re-referenced when it is prepared, so its presets skip that stage. Spectral preset names are `stft_{rate}Hz`,
 `stft_brainbert_{rate}Hz`, `multi_stft_{rate}Hz`, and
 `multi_stft_zscore_{rate}Hz`. Update existing commands by dropping the prefix and
 moving the Multi-STFT `zscore` suffix before the rate (for example,
@@ -351,6 +418,7 @@ Use a new output root after migrating; existing result JSONs are still skipped.
 | NeuroprobeV2 | `lite` |
 | BYD | `full` |
 | PIPPI, including DIVER | `high-cov` |
+| Miller | `full` |
 
 Subset tiers select eligible recordings and prepared splits; `TASKS` and `TARGETS`
 select the evaluation grid. For the listed PIPPI within-session targets,
@@ -362,7 +430,8 @@ brain-area field and owns the benchmark learning rates (`upstream_lr: 1e-3`,
 Use `experiment=default` or `experiment=decodable`; the separate `barista`
 experiment has been removed.
 
-Selecting `model=diver` selects `dataset.coordinate_profile=diver_mni`.
+Selecting `model=diver` selects `dataset.coordinate_profile=diver_mni`
+(Miller gets no coordinates from it; see the positions block of the Miller script).
 Its training settings stay in the model YAML; use `default` or `decodable`
 in place of the former `diver` experiment.
 
@@ -426,7 +495,7 @@ Model dependencies are included in the installation above.
 | --- | --- |
 | PopT-v2 | Use the multi-STFT weights shared upon request. Accepts `model_cfg`/`model` or `config`/`model_state` checkpoint dictionaries. |
 | BrainBERT | Expects the upstream `model_cfg`/`model` format. |
-| BaRISTA | Use the weights shared upon request and prepared Destrieux metadata. The `barista` preset selects `localization_Destrieux` for NeuroprobeV2 or `label_destrieux` for BYD/PIPPI. |
+| BaRISTA | Use the weights shared upon request and prepared Destrieux metadata. The `barista` preset selects `localization_Destrieux` for NeuroprobeV2 or `label_destrieux` for BYD/PIPPI/Miller. |
 
 For DIVER, select its table entry and add these fields to `paths/local.yaml`:
 

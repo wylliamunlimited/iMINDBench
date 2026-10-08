@@ -139,7 +139,7 @@ COORDINATE_PROFILES: dict[str, dict[str, tuple[str, Any]]] = {
     # popt_miller: real positions for PopT and BaRISTA. Needs the Miller build
     # with MNI152 positions. mni152_strict marks low-quality positions as NaN,
     # and channels with NaN positions are dropped, so pair this profile with
-    # the positions cell list. Miller's MNI152 millimetres are the same frame
+    # the positions cell lists. Miller's MNI152 millimetres are the same frame
     # KelesBYD2024 uses, so the BYD transform applies unchanged.
     "popt_miller": {
         "millerecog2019": ("mni152_strict", byd_mni152_ras_to_popt_lip),

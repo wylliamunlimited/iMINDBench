@@ -1,0 +1,13 @@
+{
+  "tasks": {
+    "cursor_vx": {"subject_sessions": ["sub7_sess17", "sub7_sess20", "sub9_sess17", "sub9_sess20", "sub22_sess17", "sub22_sess20", "sub24_sess17", "sub24_sess20"]},
+    "cursor_vy": {"subject_sessions": ["sub7_sess17", "sub7_sess20", "sub9_sess17", "sub9_sess20", "sub22_sess17", "sub22_sess20", "sub24_sess17", "sub24_sess20"]},
+    "flex_index": {"subject_sessions": ["sub3_sess14", "sub5_sess14", "sub13_sess14", "sub16_sess14", "sub19_sess14", "sub26_sess14", "sub27_sess14", "sub29_sess14"]},
+    "flex_little": {"subject_sessions": ["sub3_sess14", "sub5_sess14", "sub13_sess14", "sub16_sess14", "sub19_sess14", "sub26_sess14", "sub27_sess14", "sub29_sess14"]},
+    "flex_middle": {"subject_sessions": ["sub3_sess14", "sub5_sess14", "sub13_sess14", "sub16_sess14", "sub19_sess14", "sub26_sess14", "sub27_sess14", "sub29_sess14"]},
+    "flex_ring": {"subject_sessions": ["sub3_sess14", "sub5_sess14", "sub13_sess14", "sub16_sess14", "sub19_sess14", "sub26_sess14", "sub27_sess14", "sub29_sess14"]},
+    "flex_thumb": {"subject_sessions": ["sub3_sess14", "sub5_sess14", "sub13_sess14", "sub16_sess14", "sub19_sess14", "sub26_sess14", "sub27_sess14", "sub29_sess14"]},
+    "target_x": {"subject_sessions": ["sub7_sess17", "sub7_sess20", "sub9_sess17", "sub9_sess20", "sub22_sess17", "sub22_sess20", "sub24_sess17", "sub24_sess20"]},
+    "target_y": {"subject_sessions": ["sub7_sess17", "sub7_sess20", "sub9_sess17", "sub9_sess20", "sub22_sess17", "sub22_sess20", "sub24_sess17", "sub24_sess20"]}
+  }
+}

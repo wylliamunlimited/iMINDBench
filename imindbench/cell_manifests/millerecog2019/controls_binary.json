@@ -1,0 +1,5 @@
+{
+  "tasks": {
+    "fixation_vs_task": {"subject_sessions": ["sub4_sess11", "sub5_sess11", "sub25_sess11"]}
+  }
+}

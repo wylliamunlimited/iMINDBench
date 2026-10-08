@@ -1,0 +1,9 @@
+{
+  "tasks": {
+    "direction_4way": {"subject_sessions": []},
+    "fingers_5way": {"subject_sessions": ["sub3_sess5", "sub6_sess5"]},
+    "gesture_type": {"subject_sessions": ["sub3_sess5"]},
+    "runid_from_rest": {"subject_sessions": ["sub3_sess5"]},
+    "which_finger": {"subject_sessions": ["sub3_sess4", "sub19_sess4", "sub26_sess4"]}
+  }
+}

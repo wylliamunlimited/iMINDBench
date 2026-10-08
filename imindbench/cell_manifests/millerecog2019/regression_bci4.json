@@ -1,0 +1,9 @@
+{
+  "tasks": {
+    "flex_index": {"subject_sessions": ["sub3_sess25", "sub5_sess25", "sub13_sess25", "sub16_sess25", "sub19_sess25", "sub26_sess25", "sub27_sess25", "sub29_sess25"]},
+    "flex_little": {"subject_sessions": ["sub3_sess25", "sub5_sess25", "sub13_sess25", "sub16_sess25", "sub19_sess25", "sub26_sess25", "sub27_sess25", "sub29_sess25"]},
+    "flex_middle": {"subject_sessions": ["sub3_sess25", "sub5_sess25", "sub13_sess25", "sub16_sess25", "sub19_sess25", "sub26_sess25", "sub27_sess25", "sub29_sess25"]},
+    "flex_ring": {"subject_sessions": ["sub3_sess25", "sub5_sess25", "sub13_sess25", "sub16_sess25", "sub19_sess25", "sub26_sess25", "sub27_sess25", "sub29_sess25"]},
+    "flex_thumb": {"subject_sessions": ["sub3_sess25", "sub5_sess25", "sub13_sess25", "sub16_sess25", "sub19_sess25", "sub26_sess25", "sub27_sess25", "sub29_sess25"]}
+  }
+}

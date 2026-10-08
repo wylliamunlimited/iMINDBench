@@ -54,9 +54,18 @@ def dataset_script(tmp_path):
                 "within_dataset": "Within-dataset",
                 "multi_dataset": "Multi-dataset",
                 "sample_efficiency": "Sample efficiency",
+                "new_task_sets": "New task sets",
+                "controls": "Controls",
+                "class_pairs": "Class pairs",
+                "regression": "Regression",
+                "regression_sliding": "Regression sliding",
+                "regression_bci4": "Regression BCI-IV",
+                "positions": "Positions",
             }[family]
-            block = source.split(f"# ── {title}", 1)[1].split("# ──", 1)[0]
-            command = block[block.index("# python -m imindbench.launch") :]
+            block = source.split(f"# ── {title} ─", 1)[1].split("# ──", 1)[0]
+            # The block's code starts at its first command, loop or array.
+            start = re.search(r"^# (?:python -m|for |[A-Z_]+=\()", block, re.M)
+            command = block[start.start() :]
             source = (
                 prefix
                 + "\n".join(line.removeprefix("# ") for line in command.splitlines())

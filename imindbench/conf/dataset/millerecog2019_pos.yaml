@@ -7,8 +7,8 @@
 #
 # Positions with quality "C" are a fallback, not a real atlas position, so they
 # are set to NaN and those channels are dropped. Run this config with the
-# positions cell list (--cells positions) so no recording loses all its
-# channels.
+# positions cell lists (--cells positions_binary or positions_multiclass) so no
+# recording loses all its channels.
 #
 # PopT and BaRISTA use popt_miller below. DIVER's model config replaces it with
 # diver_mni, so the run script adds
