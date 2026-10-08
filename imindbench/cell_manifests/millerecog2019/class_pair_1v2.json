@@ -1,0 +1,9 @@
+{
+  "tasks": {
+    "direction_4way": {"subject_sessions": ["sub18_sess8", "sub20_sess8", "sub23_sess8", "sub24_sess8", "sub26_sess8"]},
+    "fingers_5way": {"subject_sessions": ["sub3_sess5", "sub4_sess5", "sub6_sess5", "sub27_sess5"]},
+    "gesture_type": {"subject_sessions": ["sub3_sess5", "sub4_sess5", "sub5_sess5", "sub27_sess5"]},
+    "runid_from_rest": {"subject_sessions": ["sub3_sess5", "sub4_sess5", "sub5_sess5", "sub27_sess5"]},
+    "which_finger": {"subject_sessions": ["sub3_sess4", "sub5_sess4", "sub13_sess4", "sub16_sess4", "sub19_sess4", "sub26_sess4", "sub27_sess4", "sub29_sess4"]}
+  }
+}

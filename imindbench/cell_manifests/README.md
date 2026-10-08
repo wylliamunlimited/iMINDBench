@@ -40,6 +40,40 @@ cell when the brainsets pipeline found enough windows and trials for each
 class. A plain grid would include combinations that do not exist, so the Miller
 run script passes `--cells` to every launch.
 
+## Miller lists (`millerecog2019/`)
+
+The packaged lists are the cell lists Danny Han used for the original Miller
+runs, converted to this layout. Only the task and target lists were kept.
+Task sets are numbered as in `conf/dataset/millerecog2019.yaml`.
+
+| List | Cells | Run with |
+|---|---|---|
+| `binary.json` | 153 binary cells of task sets 1-8 | `dataset.label_mode=binary` |
+| `multiclass.json` | 25 multiclass cells of task sets 1-8 | `dataset.label_mode=multiclass` |
+| `positions_binary.json`, `positions_multiclass.json` | cells of the two lists above whose recording has trustworthy (quality A or B) MNI152 positions | `dataset=millerecog2019_pos` and the matching label mode |
+| `class_pair_<a>v<b>.json` | cells of `multiclass.json` with more than `b` classes | `dataset.label_mode=multiclass`, `dataset.class_pair=[a,b]` |
+| `new_sets_binary.json` | binary cells of task sets 10 (faces_noise) and 11 (memory_nback), without the control tasks | `dataset.label_mode=binary` |
+| `controls_binary.json`, `controls_multiclass.json` | control tasks: their labels follow time in the session, so a good score does not show decoding | the matching label mode |
+| `regression.json` | regression targets of task sets 13, 16, 19 (1.0 s windows) | `dataset.label_mode=regression` |
+| `regression_w500.json`, `regression_w250.json` | the same targets with 0.5 s and 0.25 s windows | `dataset.label_mode=regression` |
+| `regression_sliding.json` | task sets 22-24 (1.0 s windows sliding in 50 ms steps) | `dataset.label_mode=regression`, `dataset.regression_target_last_samples=2` |
+| `regression_bci4.json` | task set 25 (BCI Competition IV split, one fold) | `dataset.label_mode=regression`, `dataset.regression_target_last_samples=1`, `dataset.fold_subset=[0]` |
+
+`binary.json` plus `multiclass.json` is the main Miller table: 178 cells.
+
+The positions and class-pair lists name every task of the list they come from,
+because the run script passes them the same task names (rule 4 above). A task
+with no qualifying cell has an empty list: for example `direction_4way` in
+`class_pair_0v4.json`, since that task has only classes 0-3.
+
+The face sets with 0.8 s windows (task sets 9 and 12) are not packaged: they
+need 0.8 s preprocessing presets, which iMINDBench does not bundle yet. The
+builder below writes them as `faces08_binary.json`.
+
+The positions lists follow the original runs' rule for trustworthy positions,
+which may be stricter than the builder's `--min-position-channels`. Compare
+before replacing them with rebuilt lists.
+
 ## Building the Miller lists
 
 The lists come from the prepared H5 files:

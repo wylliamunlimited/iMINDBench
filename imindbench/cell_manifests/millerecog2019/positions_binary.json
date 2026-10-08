@@ -1,0 +1,25 @@
+{
+  "tasks": {
+    "cue_vs_isi": {"subject_sessions": ["sub16_sess7", "sub26_sess7"]},
+    "fb_target_A_vs_B": {"subject_sessions": ["sub1_sess3", "sub7_sess3", "sub11_sess3", "sub16_sess3"]},
+    "flex_vs_rest": {"subject_sessions": ["sub3_sess4", "sub19_sess4", "sub26_sess4"]},
+    "gesture_type": {"subject_sessions": ["sub6_sess5"]},
+    "gesture_vs_rest": {"subject_sessions": ["sub3_sess5", "sub6_sess5"]},
+    "hand_vs_tongue": {"subject_sessions": ["sub3_sess1", "sub4_sess1", "sub5_sess1", "sub6_sess1", "sub7_sess1", "sub8_sess1", "sub9_sess1", "sub11_sess1", "sub12_sess1", "sub16_sess1", "sub17_sess1", "sub18_sess1", "sub19_sess1", "sub20_sess1", "sub22_sess1", "sub24_sess1", "sub25_sess1", "sub26_sess1", "sub29_sess1"]},
+    "im_hand_vs_tongue": {"subject_sessions": ["sub3_sess2", "sub7_sess2", "sub11_sess2", "sub16_sess2", "sub18_sess2", "sub22_sess2", "sub24_sess2"]},
+    "im_move_vs_rest": {"subject_sessions": ["sub1_sess3", "sub3_sess2", "sub7_sess2", "sub7_sess3", "sub11_sess2", "sub11_sess3", "sub16_sess2", "sub18_sess2", "sub22_sess2", "sub24_sess2"]},
+    "mot_hand_vs_tongue": {"subject_sessions": ["sub3_sess2", "sub7_sess2", "sub11_sess2", "sub16_sess2", "sub18_sess2", "sub22_sess2", "sub24_sess2"]},
+    "mot_kind": {"subject_sessions": ["sub1_sess3", "sub7_sess3"]},
+    "mot_move_vs_rest": {"subject_sessions": ["sub1_sess3", "sub3_sess2", "sub7_sess2", "sub7_sess3", "sub11_sess2", "sub11_sess3", "sub16_sess2", "sub16_sess3", "sub18_sess2", "sub22_sess2", "sub24_sess2"]},
+    "move_vs_rest": {"subject_sessions": ["sub3_sess1", "sub4_sess1", "sub5_sess1", "sub6_sess1", "sub7_sess1", "sub8_sess1", "sub9_sess1", "sub11_sess1", "sub12_sess1", "sub16_sess1", "sub17_sess1", "sub18_sess1", "sub19_sess1", "sub20_sess1", "sub22_sess1", "sub24_sess1", "sub25_sess1", "sub26_sess1", "sub29_sess1"]},
+    "nouns_read_vs_isi": {"subject_sessions": ["sub16_sess6", "sub26_sess6"]},
+    "real_vs_imag_hand": {"subject_sessions": ["sub3_sess2", "sub7_sess2", "sub11_sess2", "sub16_sess2", "sub18_sess2", "sub22_sess2", "sub24_sess2"]},
+    "real_vs_imag_move": {"subject_sessions": ["sub1_sess3", "sub7_sess3", "sub11_sess3"]},
+    "real_vs_imag_tongue": {"subject_sessions": ["sub3_sess2", "sub7_sess2", "sub11_sess2", "sub16_sess2", "sub18_sess2", "sub22_sess2", "sub24_sess2"]},
+    "runid_from_isi": {"subject_sessions": ["sub16_sess6", "sub16_sess7", "sub26_sess6", "sub26_sess7"]},
+    "runid_from_rest": {"subject_sessions": ["sub1_sess3", "sub3_sess2", "sub6_sess5", "sub7_sess2", "sub7_sess3", "sub11_sess2", "sub11_sess3", "sub16_sess2", "sub18_sess2", "sub22_sess2", "sub24_sess2"]},
+    "stim_vs_isi": {"subject_sessions": []},
+    "verbs_speak_vs_isi": {"subject_sessions": ["sub12_sess6", "sub16_sess6", "sub26_sess6"]},
+    "verbs_vs_nouns_cue": {"subject_sessions": ["sub16_sess6", "sub16_sess7", "sub26_sess6", "sub26_sess7"]}
+  }
+}
