@@ -186,6 +186,17 @@ def log_fold_metrics(fold_idx: int, fold_result: dict) -> None:
         )
         return
 
+    if fold_result.get("label_mode") == "regression":
+        log(
+            f"Fold {fold_idx}: regression target={fold_result.get('target')} "
+            f"head={fold_result.get('head')} "
+            f"Val traj r: {fold_result.get('val_traj_r', float('nan')):.4f}, "
+            f"Test traj r: {fold_result['test_traj_r']:.4f}, "
+            f"Test mean r: {fold_result['test_mean_r']:.4f}",
+            priority=0,
+        )
+        return
+
     if "val_accuracy" in fold_result and "val_roc_auc" in fold_result:
         log(
             f"Fold {fold_idx}: Val acc: {fold_result['val_accuracy']:.3f}, "
@@ -230,6 +241,9 @@ def resolve_task_mode_config(dataset_cfg) -> dict:
     class_pair = dataset_cfg.get("class_pair", None)
     if class_pair is not None:
         entries["class_pair"] = [int(label) for label in class_pair]
+    last_samples = dataset_cfg.get("regression_target_last_samples", None)
+    if last_samples:
+        entries["regression_target_last_samples"] = int(last_samples)
     fold_subset = dataset_cfg.get("fold_subset", None)
     if fold_subset is not None:
         entries["fold_subset"] = [int(fold_idx) for fold_idx in fold_subset]
@@ -374,6 +388,23 @@ def log_final_wandb_metrics(wandb_run, results_population) -> None:
             return float("nan"), float("nan")
         values_arr = np.asarray(values, dtype=np.float64)
         return float(values_arr.mean()), float(values_arr.std())
+
+    if any(fold.get("label_mode") == "regression" for fold in completed_folds):
+        summary = {}
+        for split in ("train", "val", "test"):
+            for metric in ("traj_r", "mean_r", "traj_mse", "traj_r2"):
+                mean, std = _mean_std(f"{split}_{metric}")
+                summary[f"final/{split}_{metric}_mean"] = mean
+                summary[f"final/{split}_{metric}_std"] = std
+        summary.update(
+            {
+                "final/n_folds": len(folds_data),
+                "final/n_completed_folds": len(completed_folds),
+                "final/n_skipped_folds": skipped_folds,
+            }
+        )
+        wandb_run.log(summary)
+        return
 
     train_acc_mean, train_acc_std = _mean_std("train_accuracy")
     train_auc_mean, train_auc_std = _mean_std("train_roc_auc")

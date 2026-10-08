@@ -11,6 +11,7 @@ import numpy as np
 from threadpoolctl import ThreadpoolController
 
 from imindbench.base_runner import BaseRunner
+from imindbench.utils import regression as regression_utils
 from imindbench.utils.logging_utils import log
 
 
@@ -146,6 +147,63 @@ class SKLearnRunner(BaseRunner):
             val_acc, val_auc = val_metrics
             result["val_accuracy"] = float(val_acc)
             result["val_roc_auc"] = float(val_auc)
+        return result
+
+    def run_fold_regression(
+        self,
+        X_train,
+        y_train,
+        X_test,
+        y_test,
+        *,
+        X_val=None,
+        y_val=None,
+        recording_ids,
+        targets,
+    ):
+        """Fit one multi-output Ridge regression for a regression fold.
+
+        y_* hold each window's row in its recording's target table; the
+        trajectories are looked up in ``targets`` by (recording id, row). One
+        Ridge maps the features to every sample of the trajectory at once, with
+        alpha = model.regression_head_lambda.
+        """
+        from sklearn.linear_model import Ridge
+
+        alpha = float(self.cfg.model.get("regression_head_lambda", 1.0))
+        Y_train, mean_train = targets.lookup(recording_ids["train"], y_train)
+        Y_test, mean_test = targets.lookup(recording_ids["test"], y_test)
+        X_train = np.asarray(X_train, dtype=np.float64)
+        log(
+            "SKLearnRunner: regression fold "
+            f"train={X_train.shape} test={np.asarray(X_test).shape} "
+            f"traj_len={Y_train.shape[1]} alpha={alpha}",
+            priority=0,
+        )
+        with _temporary_sklearn_thread_limits(self.sklearn_num_threads):
+            fit_start = time.time()
+            ridge = Ridge(alpha=alpha)
+            ridge.fit(X_train, Y_train)
+            fit_elapsed = time.time() - fit_start
+            scores = {
+                "train": regression_utils.score(
+                    ridge.predict(X_train), Y_train, mean_train
+                ),
+                "val": None,
+                "test": regression_utils.score(
+                    ridge.predict(X_test), Y_test, mean_test
+                ),
+            }
+            if X_val is not None and y_val is not None and len(y_val) > 0:
+                Y_val, mean_val = targets.lookup(recording_ids["val"], y_val)
+                scores["val"] = regression_utils.score(
+                    ridge.predict(X_val), Y_val, mean_val
+                )
+        log(f"SKLearnRunner: Ridge fit completed in {fit_elapsed:.2f}s", priority=0)
+        gc.collect()
+        result = self.build_regression_fold_result(scores)
+        result["head"] = f"sklearn_ridge(alpha={alpha})"
+        result["target"] = str(targets.target)
         return result
 
     def _evaluate(self, model, X, y, *, split: str):
