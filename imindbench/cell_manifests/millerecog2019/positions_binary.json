@@ -219,6 +219,10 @@
    ],
    "n_subject_sessions": 11
   },
+  "stim_vs_isi": {
+   "subject_sessions": [],
+   "n_subject_sessions": 0
+  },
   "verbs_speak_vs_isi": {
    "subject_sessions": [
     "sub12_sess6",

@@ -37,6 +37,8 @@ Lists:
                                  only when the files carry positions
   class_pair_<a>v<b>.json        cells of multiclass.json with more than b
                                  classes; run with dataset.class_pair=[a,b]
+  The positions and class-pair lists name every task of their source list;
+  a task with no qualifying cell has an empty list.
   new_sets_binary.json,          classification cells of task sets 10-11
   new_sets_multiclass.json       (1.0 s windows), without the control tasks
   faces08_binary.json            classification cells of task sets 9 and 12
@@ -190,6 +192,20 @@ def build_lists(recordings: list[dict], *, min_position_channels: int = 1) -> di
             for name, sets in REGRESSION_SETS.items():
                 if session in sets:
                     lists[name][entry["target"]].add(target)
+    # The run script passes the same task names to every list derived from
+    # binary.json or multiclass.json, and the launcher needs each task named in
+    # the list. So a derived list names every task of its source list, with an
+    # empty target list where no cell qualifies (for example direction_4way in
+    # class_pair_0v4, since that task has only classes 0-3).
+    for name in list(lists):
+        if name.startswith("positions_"):
+            source = name.removeprefix("positions_")
+        elif name.startswith("class_pair_"):
+            source = "multiclass"
+        else:
+            continue
+        for task in lists[source]:
+            lists[name].setdefault(task, set())
     if not has_positions:
         for name in [name for name in lists if name.startswith("positions_")]:
             lists.pop(name)

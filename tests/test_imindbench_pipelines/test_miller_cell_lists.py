@@ -73,6 +73,16 @@ def test_positions_lists_are_subsets_of_the_main_table():
     assert _cells("positions_multiclass") <= _cells("multiclass")
 
 
+def test_derived_lists_name_every_task_of_their_source_list():
+    # The run script passes one task array to each list derived from binary.json
+    # or multiclass.json, and the launcher needs every task named in the list.
+    multiclass_tasks = set(_load("multiclass")["tasks"])
+    assert set(_load("positions_binary")["tasks"]) == set(_load("binary")["tasks"])
+    assert set(_load("positions_multiclass")["tasks"]) == multiclass_tasks
+    for name in _class_pair_lists():
+        assert set(_load(name)["tasks"]) == multiclass_tasks, name
+
+
 def test_controls_are_not_in_the_other_lists():
     controls = {
         task for task, _ in _cells("controls_binary") | _cells("controls_multiclass")

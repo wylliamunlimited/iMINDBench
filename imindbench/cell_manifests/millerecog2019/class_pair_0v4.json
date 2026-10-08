@@ -8,6 +8,10 @@
  ],
  "n_cells": 12,
  "tasks": {
+  "direction_4way": {
+   "subject_sessions": [],
+   "n_subject_sessions": 0
+  },
   "fingers_5way": {
    "subject_sessions": [
     "sub3_sess5",
@@ -16,6 +20,14 @@
     "sub27_sess5"
    ],
    "n_subject_sessions": 4
+  },
+  "gesture_type": {
+   "subject_sessions": [],
+   "n_subject_sessions": 0
+  },
+  "runid_from_rest": {
+   "subject_sessions": [],
+   "n_subject_sessions": 0
   },
   "which_finger": {
    "subject_sessions": [

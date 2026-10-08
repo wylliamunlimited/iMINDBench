@@ -62,6 +62,11 @@ Task sets are numbered as in `conf/dataset/millerecog2019.yaml`.
 
 `binary.json` plus `multiclass.json` is the main Miller table: 178 cells.
 
+The positions and class-pair lists name every task of the list they come from,
+because the run script passes them the same task names (rule 4 above). A task
+with no qualifying cell has an empty list: for example `direction_4way` in
+`class_pair_0v4.json`, since that task has only classes 0-3.
+
 The face sets with 0.8 s windows (task sets 9 and 12) are not packaged: they
 need 0.8 s preprocessing presets, which iMINDBench does not bundle yet. The
 builder below writes them as `faces08_binary.json`.

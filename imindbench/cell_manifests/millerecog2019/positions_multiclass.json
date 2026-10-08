@@ -8,6 +8,10 @@
  ],
  "n_cells": 7,
  "tasks": {
+  "direction_4way": {
+   "subject_sessions": [],
+   "n_subject_sessions": 0
+  },
   "fingers_5way": {
    "subject_sessions": [
     "sub3_sess5",

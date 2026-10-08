@@ -151,3 +151,43 @@ def test_from_brainsets_without_brainsets_is_reported(monkeypatch):
     monkeypatch.setitem(sys.modules, "brainsets.datasets.MillerECoG2019", None)
     with pytest.raises(ImportError, match="--from-brainsets needs brainsets"):
         builder.miller_dataset_module(from_brainsets=True)
+
+
+def test_derived_lists_name_every_task_of_their_source_list():
+    def recording(target, session, tasks, positions):
+        return {
+            "target": target,
+            "session": session,
+            "tasks": tasks,
+            "controls": [],
+            "regression": [],
+            "good_position_channels": positions,
+        }
+
+    lists = builder.build_lists(
+        [
+            recording("sub3_sess1", 1, [_multiclass("direction_4way", 4)], 0),
+            recording(
+                "sub3_sess5",
+                5,
+                [_binary("flex_vs_rest"), _multiclass("fingers_5way", 5)],
+                5,
+            ),
+        ]
+    )
+    # direction_4way has no class 4 and no recording with positions, so it is
+    # named with an empty list rather than left out.
+    assert lists["class_pair_0v4"] == {
+        "direction_4way": set(),
+        "fingers_5way": {"sub3_sess5"},
+    }
+    assert lists["positions_multiclass"] == {
+        "direction_4way": set(),
+        "fingers_5way": {"sub3_sess5"},
+    }
+    assert lists["positions_binary"] == {"flex_vs_rest": {"sub3_sess5"}}
+    manifest = builder.to_manifest(lists["class_pair_0v4"], name="class_pair_0v4")
+    assert manifest["tasks"]["direction_4way"] == {
+        "subject_sessions": [],
+        "n_subject_sessions": 0,
+    }
