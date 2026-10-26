@@ -19,6 +19,14 @@ paths:
   train_source_cache_dir: null
   preprocessed_split_cache_dir: null
   decodable_subject_sessions_dir: null
+  # Omni-iEEG (dataset=omni_ieeg*): the official split tables, and the raw
+  # BIDS tree (the soz_outcome scorer reads its *_channels.tsv files). The
+  # processed omni_ieeg/ and omni_ieeg_hfo/ directories live under dataset_root.
+  omni_ictal_split_csv: null
+  omni_sleep_split_csv: null
+  omni_final_split_csv: null
+  omni_anatomical_mapping_csv: null
+  omni_raw_root: null
 
 # Regression settings, used only when dataset.label_mode is regression. They are
 # declared here so every model accepts --set model.regression_head=... .

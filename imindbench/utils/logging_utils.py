@@ -30,6 +30,18 @@ DEFAULT_RESULTS_TIME_BIN = "one_second_after_onset"
 PUBLIC_SUBJECT_KEY_PREFIX = "btbank"
 
 
+def _int_or_str(value):
+    """``int(value)`` for numeric ids, else the id as a string.
+
+    Most datasets use integer subject/session ids; Omni-iEEG uses BIDS labels
+    such as ``sub-hupHUP064`` and the pooled sentinel ``all``.
+    """
+    text = str(value).strip()
+    if text.lstrip("-").isdigit():
+        return int(text)
+    return text
+
+
 def set_verbose(value):
     """Set global verbose flag."""
     # Module-level flag keeps logging behavior consistent across imports without
@@ -324,8 +336,8 @@ def build_internal_eval_result(
         "provider": str(provider),
         "task": str(task),
         "regime": str(regime),
-        "test_subject": int(subject_id),
-        "test_session": int(trial_id),
+        "test_subject": _int_or_str(subject_id),
+        "test_session": _int_or_str(trial_id),
         "model_name": str(model_name),
         "preprocess_type": str(preprocess_type),
         "time_bins": build_internal_time_bins(results_population),

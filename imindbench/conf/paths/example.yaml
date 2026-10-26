@@ -18,5 +18,12 @@ dataset_dirname: neuroprobe_2025
 # train_source_cache_dir: /path/to/train_cache
 # preprocessed_split_cache_dir: /path/to/preprocessed_cache
 # decodable_subject_sessions_dir: /path/to/population_manifests
+# Omni-iEEG (see README, "Omni-iEEG"); its processed omni_ieeg/ and
+# omni_ieeg_hfo/ directories live under dataset_root:
+# omni_ictal_split_csv: /path/to/Omni-iEEG/omni_ieeg/exploratory_model/ictal_sleep/ictal_split_cross.csv
+# omni_sleep_split_csv: /path/to/Omni-iEEG/omni_ieeg/exploratory_model/ictal_sleep/sleep_split_cross.csv
+# omni_final_split_csv: /path/to/brainsets/raw/omni_ieeg/derivatives/datasplit/final_split.csv
+# omni_anatomical_mapping_csv: /path/to/Omni-iEEG/omni_ieeg/exploratory_model/anatomical/anatomical_mapping.csv
+# omni_raw_root: /path/to/brainsets/raw/omni_ieeg
 # With training-source caching enabled, null uses the dataset root's
 # .neuroprobe_eval_train_source_cache directory.

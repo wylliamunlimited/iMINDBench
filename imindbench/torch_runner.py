@@ -33,6 +33,18 @@ class TorchRunner(BaseRunner):
         """Set wandb run object for logging."""
         self.wandb_run = wandb_run
 
+    def _ignore_label(self):
+        """Optional label excluded from training classes and metrics.
+
+        ``runner.ignore_label`` (default ``None``) marks samples that are only
+        kept for their predictions, e.g. unlabelled Omni-iEEG SOZ test channels.
+        """
+        runner_cfg = self.cfg.get("runner", None) if hasattr(self.cfg, "get") else None
+        if runner_cfg is None or not hasattr(runner_cfg, "get"):
+            return None
+        value = runner_cfg.get("ignore_label", None)
+        return None if value is None else int(value)
+
     def _configure_determinism(self):
         """Configure PyTorch deterministic settings based on config."""
         runtime_cfg = getattr(self.cfg, "runtime", {})
@@ -198,6 +210,10 @@ class TorchRunner(BaseRunner):
             class_to_index=class_to_index,
             criterion=None,
         )
+        runtime_cfg = self.cfg.get("runtime", {})
+        prediction_rows = (
+            [] if runtime_cfg.get("save_test_predictions", False) else None
+        )
         test_acc, test_auc, _, _ = self._evaluate_loader(
             model,
             test_loader,
@@ -205,7 +221,15 @@ class TorchRunner(BaseRunner):
             classes=classes,
             class_to_index=class_to_index,
             criterion=None,
+            prediction_rows=prediction_rows,
         )
+        if prediction_rows is not None:
+            self._save_test_predictions(
+                prediction_rows,
+                classes,
+                fold_idx,
+                details=bool(runtime_cfg.get("save_test_prediction_details", False)),
+            )
 
         if self.wandb_run is not None and fold_idx is not None:
             self.wandb_run.log(
@@ -230,9 +254,73 @@ class TorchRunner(BaseRunner):
             "test_roc_auc": float(test_auc),
         }
 
+    @staticmethod
+    def _save_test_predictions(prediction_rows, classes, fold_idx, details=False):
+        """Write per-window test predictions next to the result JSON (opt-in).
+
+        With ``details`` (``runtime.save_test_prediction_details``) each row also
+        carries the sample's channel ids/names and the raw class logits, which the
+        Omni-iEEG single-channel scorer needs.
+        """
+        import csv
+
+        from hydra.core.hydra_config import HydraConfig
+
+        out_dir = (
+            HydraConfig.get().runtime.output_dir
+            if HydraConfig.initialized()
+            else os.getcwd()
+        )
+        suffix = "" if fold_idx in (None, 0) else f"_fold{fold_idx}"
+        path = os.path.join(out_dir, f"test_predictions{suffix}.csv")
+        class_list = np.asarray(classes).tolist()
+        prob_cols = [f"prob_class_{c}" for c in class_list]
+        detail_cols = (
+            ["channel_id", "channel_name", *[f"logit_class_{c}" for c in class_list]]
+            if details
+            else []
+        )
+        with open(path, "w", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(
+                [
+                    "recording_id",
+                    "window_start_sec",
+                    "window_end_sec",
+                    "y_true",
+                    *prob_cols,
+                    *detail_cols,
+                ]
+            )
+            for row in prediction_rows:
+                recs, starts, ends, ys, probs = row[:5]
+                extra = row[5] if len(row) > 5 else None
+                for i in range(len(recs)):
+                    values = [
+                        recs[i],
+                        f"{float(starts[i]):.6f}",
+                        f"{float(ends[i]):.6f}",
+                        int(ys[i]),
+                        *[f"{float(p):.8f}" for p in probs[i]],
+                    ]
+                    if details:
+                        channel_ids = extra["channel_ids"][i]
+                        names = extra["channel_names"]
+                        channel_names = [] if names is None else names[i]
+                        values.extend(
+                            [
+                                "|".join(str(c) for c in channel_ids),
+                                "|".join(str(n) for n in channel_names),
+                                *[f"{float(v):.8f}" for v in extra["logits"][i]],
+                            ]
+                        )
+                    writer.writerow(values)
+        log(f"Saved test predictions to {path}", priority=0)
+
     def _infer_classes_from_loader(self, loader: DataLoader) -> np.ndarray:
         """Infer sorted unique class ids from DataLoader batches."""
         labels: set[int] = set()
+        ignore_label = self._ignore_label()
         for raw_batch in loader:
             if not isinstance(raw_batch, dict) or "y" not in raw_batch:
                 raise ValueError(
@@ -253,6 +341,8 @@ class TorchRunner(BaseRunner):
                     raise TypeError(
                         f"Class labels must be integers, got {type(value).__name__}."
                     )
+                if ignore_label is not None and int(value) == ignore_label:
+                    continue
                 labels.add(int(value))
 
         if not labels:
@@ -282,15 +372,27 @@ class TorchRunner(BaseRunner):
         if not class_to_index:
             raise ValueError(f"{context}: class_to_index must be non-empty.")
 
+        ignore_label = self._ignore_label()
+        ignored = None
+        if ignore_label is not None and ignore_label not in class_to_index:
+            ignored = target == ignore_label
+            if not torch.any(ignored):
+                ignored = None
+
         # Fast path when raw labels already match the contiguous class space.
-        if all(class_to_index.get(idx) == idx for idx in range(len(class_to_index))):
+        if ignored is None and all(
+            class_to_index.get(idx) == idx for idx in range(len(class_to_index))
+        ):
             return target
 
         encoded = torch.full_like(target, fill_value=-1)
         for raw_label, encoded_idx in class_to_index.items():
             encoded[target == int(raw_label)] = int(encoded_idx)
-        if torch.any(encoded < 0):
-            unknown = torch.unique(target[encoded < 0]).detach().cpu().tolist()
+        if ignored is not None:
+            # CrossEntropyLoss skips targets equal to its default ignore_index.
+            encoded[ignored] = -100
+        if torch.any(encoded == -1):
+            unknown = torch.unique(target[encoded == -1]).detach().cpu().tolist()
             raise ValueError(
                 f"{context}: encountered labels not present in the train class map: "
                 f"{unknown}. train classes={sorted(class_to_index.keys())}"
@@ -724,13 +826,22 @@ class TorchRunner(BaseRunner):
         classes: np.ndarray,
         class_to_index: dict[int, int],
         criterion=None,
+        prediction_rows: list | None = None,
     ):
-        """Evaluate a model on a split DataLoader."""
+        """Evaluate a model on a split DataLoader.
+
+        When ``prediction_rows`` is a list, per-window predictions (recording id,
+        window times, label, class probabilities) are appended to it.
+        """
         model.model.eval()
         all_probs = []
         all_targets = []
         running_loss = 0.0
         n_samples = 0
+        details = bool(
+            self.cfg.get("runtime", {}).get("save_test_prediction_details", False)
+        )
+        ignore_label = self._ignore_label()
 
         with torch.no_grad():
             for raw_batch in loader:
@@ -756,8 +867,28 @@ class TorchRunner(BaseRunner):
                 probs = torch.nn.functional.softmax(outputs, dim=1)
                 all_probs.append(probs.cpu().numpy())
                 all_targets.append(batch_y.cpu().numpy())
+                if prediction_rows is not None:
+                    row = (
+                        list(raw_batch["recording_ids"]),
+                        list(raw_batch["window_start_sec"]),
+                        list(raw_batch["window_end_sec"]),
+                        batch_y.cpu().numpy(),
+                        probs.cpu().numpy(),
+                    )
+                    if details:
+                        row = row + (
+                            {
+                                "channel_ids": list(raw_batch["channel_ids"]),
+                                "channel_names": raw_batch.get("channel_names"),
+                                "logits": outputs.detach().float().cpu().numpy(),
+                            },
+                        )
+                    prediction_rows.append(row)
 
-                if criterion is not None:
+                if criterion is not None and not (
+                    ignore_label is not None
+                    and bool(torch.all(batch_y_raw_device == ignore_label))
+                ):
                     running_loss += float(
                         self._compute_model_loss(
                             model,
@@ -775,6 +906,12 @@ class TorchRunner(BaseRunner):
 
         y_proba = np.concatenate(all_probs, axis=0)
         y_true = np.concatenate(all_targets, axis=0)
+        if ignore_label is not None:
+            keep = y_true != ignore_label
+            y_proba = y_proba[keep]
+            y_true = y_true[keep]
+            if y_true.size == 0:
+                return float("nan"), float("nan"), float("nan"), None
         accuracy, roc_auc = self._compute_metrics(y_true, y_proba, classes)
         f1 = self._compute_f1_metric(y_true, y_proba, classes)
         avg_loss = (

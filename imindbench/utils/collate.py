@@ -90,6 +90,15 @@ def variable_channel_collate(samples: list[dict[str, Any]]) -> dict[str, Any]:
         [] if all(brain_areas_present) else None
     )
 
+    # Single-channel samples (SingleChannelSplitDataset) also carry their channel
+    # name, used to label per-channel test predictions. Other batches keep the
+    # historical key set.
+    names_present = all(
+        bool(sample.get("single_channel_sample", False))
+        and sample.get("channel_names") is not None
+        for sample in samples
+    )
+    channel_names: list[list[str]] | None = [] if names_present else None
     channel_ids: list[list[str]] = []
     recording_ids: list[str] = []
     sample_indices: list[int] = []
@@ -123,6 +132,8 @@ def variable_channel_collate(samples: list[dict[str, Any]]) -> dict[str, Any]:
             batched_brain_areas.append(brain_areas)
 
         channel_ids.append(list(sample["channel_ids"]))
+        if channel_names is not None:
+            channel_names.append(list(sample["channel_names"]))
         recording_ids.append(sample["recording_id"])
         sample_indices.append(int(sample["sample_idx"]))
         window_start_sec.append(float(sample["window_start_sec"]))
@@ -144,4 +155,6 @@ def variable_channel_collate(samples: list[dict[str, Any]]) -> dict[str, Any]:
         "window_end_sec": window_end_sec,
         "split": split,
     }
+    if channel_names is not None:
+        batch["channel_names"] = channel_names
     return batch

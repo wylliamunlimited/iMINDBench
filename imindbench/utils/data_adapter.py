@@ -30,6 +30,7 @@ from imindbench.utils.logging_utils import log, log_fold_split_sample_counts
 from imindbench.utils.pipeline_contracts import (
     AUTO_MAX_TRAIN_SAMPLES_PER_SUBJECT,
     build_processed_split_provider,
+    dataset_single_channel,
     get_dataset_class,
     needs_region_intersection_pool,
     resolve_train_source_configs,
@@ -120,6 +121,7 @@ COORDINATE_PROFILES: dict[str, dict[str, tuple[str, Any]]] = {
         "berezutskayapippi2022": ("acpc", pippi_acpc_to_popt_lip),
         "neuroprobe2025": ("btb_lip", identity),
         "neuroprobev2": ("btb_lip", identity),
+        "omni_ieeg": ("omni_none", no_coordinates),
     },
     "diver_mni": {
         "millerecog2019": ("talairach", no_coordinates),
@@ -127,6 +129,7 @@ COORDINATE_PROFILES: dict[str, dict[str, tuple[str, Any]]] = {
         "berezutskayapippi2022": ("acpc", no_coordinates),
         "neuroprobe2025": ("btb_xyz", identity),
         "neuroprobev2": ("btb_xyz", identity),
+        "omni_ieeg": ("omni_none", no_coordinates),
     },
     # The profiles below exist for millerecog2019 only. Selecting one of them
     # for another dataset fails with "has no mapping for provider".
@@ -147,6 +150,17 @@ COORDINATE_PROFILES: dict[str, dict[str, tuple[str, Any]]] = {
     # diver_mni_miller: the same MNI152 positions, passed to DIVER unchanged.
     "diver_mni_miller": {
         "millerecog2019": ("mni152_strict", identity),
+    },
+    # omni_none: Omni-iEEG ships no electrode positions. Its dataset class
+    # provides an all-zero "omni_none" frame, passed through unchanged; every
+    # other dataset gets no coordinates under this profile.
+    "omni_none": {
+        "omni_ieeg": ("omni_none", identity),
+        "millerecog2019": ("talairach", no_coordinates),
+        "kelesbyd2024": ("byd_mni152_ras", no_coordinates),
+        "berezutskayapippi2022": ("acpc", no_coordinates),
+        "neuroprobe2025": ("btb_lip", no_coordinates),
+        "neuroprobev2": ("btb_lip", no_coordinates),
     },
 }
 
@@ -450,8 +464,8 @@ def _build_train_source_cache_identity(
         "coordinate_profile": str(
             source_cfg.get("coordinate_profile", source_dataset.coordinate_profile)
         ),
-        "test_subject": int(source_cfg["test_subject"]),
-        "test_session": int(source_cfg["test_session"]),
+        "test_subject": _int_or_str(source_cfg["test_subject"]),
+        "test_session": _int_or_str(source_cfg["test_session"]),
         "split": str(split_summary["split"]),
         "fold_idx": int(fold_idx),
         "recording_ids": list(split_summary["recording_ids"]),
@@ -512,7 +526,7 @@ def _build_preprocessed_split_cache_identity(
     brain_area_key: str | None,
 ) -> dict[str, Any]:
     """Build the model-independent identity for one prepared fold cache entry."""
-    return {
+    identity = {
         "cache_version": _PREPROCESSED_SPLIT_CACHE_VERSION,
         "window_slicing_policy": split_datasets["train"].window_slicing_policy,
         "provider": str(dataset_cfg.provider),
@@ -527,8 +541,11 @@ def _build_preprocessed_split_cache_identity(
         "coordinate_profile": str(
             _dataset_cfg_get(dataset_cfg, "coordinate_profile", "popt_lip")
         ),
-        "test_subject": int(dataset_cfg.test_subject),
-        "test_session": int(dataset_cfg.test_session),
+        # Numeric ids stay ints so existing providers keep their cache identity;
+        # Omni-iEEG ids such as "sub-hupHUP064" or the pooled "all" stay strings.
+        "test_subject": _int_or_str(dataset_cfg.test_subject),
+        "test_session": _int_or_str(dataset_cfg.test_session),
+        "provider_options": _provider_options_identity(dataset_cfg),
         "fold_idx": int(fold_idx),
         "uniquify_channel_ids_with_subject": bool(
             dataset_cfg.uniquify_channel_ids_with_subject
@@ -560,6 +577,14 @@ def _build_preprocessed_split_cache_identity(
             for split in ("train", "val", "test")
         },
     }
+    if str(dataset_cfg.provider) == "omni_ieeg":
+        # Omni windows carry exactly round(duration * rate) samples
+        # (_exact_omni_window). Entries cached before that hold mixed
+        # 30000/30001-sample windows that variable_channel_collate rejects, so
+        # they must not be reused. Keyed on this provider alone, so every other
+        # provider's entries keep their identity.
+        identity["omni_window_length"] = "exact_nominal_v1"
+    return identity
 
 
 def _preprocessed_split_cache_path(
@@ -819,6 +844,24 @@ def _dataset_cfg_get(dataset_cfg: Any, key: str, default: Any) -> Any:
     if callable(getter):
         return getter(key, default)
     return getattr(dataset_cfg, key, default)
+
+
+def _int_or_str(value: Any) -> int | str:
+    """``int(value)`` for numeric ids, else the id as a string (Omni-iEEG)."""
+    text = str(value).strip()
+    if text.lstrip("-").isdigit():
+        return int(text)
+    return text
+
+
+def _provider_options_identity(dataset_cfg: Any) -> dict[str, Any] | None:
+    """Plain, key-sorted copy of dataset.provider_options for cache identities."""
+    options = _dataset_cfg_get(dataset_cfg, "provider_options", None)
+    if not options:
+        return None
+    if not isinstance(options, dict):
+        options = OmegaConf.to_container(options, resolve=True)
+    return {str(key): options[key] for key in sorted(options)}
 
 
 def _normalize_decodable_subject_sessions_only(value: Any) -> bool:
@@ -2711,6 +2754,46 @@ class WindowedNeuroprobeSplitDataset(torch.utils.data.Dataset):
         self._channel_cache[recording_id] = meta
         return meta
 
+    @staticmethod
+    def _exact_omni_window(rec, recording_id, start, end, window, window_data):
+        """Give an Omni-iEEG window exactly round(duration * rate) samples.
+
+        The upstream extractors take a fixed sample COUNT from an integer index
+        (``usable_data[i : i + int(duration * rate)]``, e.g. Omni-iEEG's
+        extract_random_samples), but the provider hands windows over as float
+        [start, end) intervals and RegularTimeSeries.slice resolves those as
+        ``ceil((start - t0) * rate)`` .. ``floor((end - t0) * rate)``. Whenever start
+        does not land exactly on the sample grid, that pair of roundings drops one
+        sample (8 % of the ictal_interictal train windows), and a window running past
+        the recording domain gets one too many (slice clamps the end to len + 1).
+        Batches then mix 30000- and 30001-sample windows and variable_channel_collate
+        refuses them.
+
+        Re-slicing with a short right margin keeps slice's own start index -- so the
+        window still begins at the first sample at or after ``start``, as upstream does
+        -- and taking the first ``n_nominal`` samples reproduces the upstream count
+        exactly. Nothing is ever padded: a window that cannot be filled from real
+        samples is an error, not a guess.
+        """
+        rate = float(window.seeg_data.sampling_rate)
+        n_nominal = int(round((end - start) * rate))
+        if window_data.shape[0] == n_nominal:
+            return window_data
+        if window_data.shape[0] < n_nominal:
+            # Ask for a few samples more on the right; the left edge is unchanged.
+            margin = 4.0 / rate
+            widened = np.asarray(rec.slice(start, end + margin).seeg_data.data)
+            if widened.shape[0] < n_nominal:
+                raise ValueError(
+                    f"Omni-iEEG window [{start}, {end}) of recording "
+                    f"{recording_id!r} holds only {widened.shape[0]} samples at "
+                    f"{rate} Hz, fewer than the {n_nominal} its duration requires, "
+                    "even after extending the right edge. The recording ends inside "
+                    "the window."
+                )
+            window_data = widened
+        return window_data[:n_nominal]
+
     def _build_raw_sample(self, idx: int) -> dict[str, Any]:
         recording_id, interval_idx = self._flat_index[idx]
         interval = self._interval_map[recording_id]
@@ -2725,6 +2808,10 @@ class WindowedNeuroprobeSplitDataset(torch.utils.data.Dataset):
         if window_data.ndim != 2:
             raise ValueError(
                 f"Expected window seeg_data.data to be 2D, got shape {window_data.shape}."
+            )
+        if self._dataset_provider == "omni_ieeg":
+            window_data = self._exact_omni_window(
+                rec, recording_id, start, end, rec.slice(start, end), window_data
             )
         # Assumes seeg_data.data is (time, all_channels).  Transpose after
         # channel selection gives (selected_channels, time) = (channels, *feature_shape).
@@ -2879,6 +2966,165 @@ def _resolve_matched_train_indices(
     }
 
 
+class SingleChannelSplitDataset(torch.utils.data.Dataset):
+    """Single-channel view of a materialized multi-channel split.
+
+    The official Omni-iEEG benchmark treats every (recording, channel, window)
+    as an independent sample. Windows are still built, preprocessed and cached
+    per recording (every stage used for single-channel runs is channel-wise, so
+    this equals per-channel preprocessing); this view then yields one sample per
+    (window, channel) with that channel's label.
+
+    Labels come from ``provider.get_channel_labels(recording_id)`` (aligned with
+    the provider's full channel list, indexed by ``sample["channel_indices"]``);
+    when it returns ``None`` the window label ``sample["y"]`` is used for every
+    channel. Channels labelled ``-1`` are dropped unless ``keep_unlabeled`` is
+    set (then ``-1`` samples must be ignored by the runner via
+    ``runner.ignore_label``).
+    """
+
+    def __init__(self, base: Any, *, provider: Any, keep_unlabeled: bool = False):
+        if not base.is_materialized():
+            raise ValueError("SingleChannelSplitDataset requires a materialized split.")
+        self.base = base
+        self.provider = provider
+        self.split = getattr(base, "split", None)
+        self.keep_unlabeled = bool(keep_unlabeled)
+        base_positions: list[int] = []
+        channel_positions: list[int] = []
+        labels_out: list[int] = []
+        label_cache: dict[str, np.ndarray | None] = {}
+        index_cache: dict[str, dict[str, int]] = {}
+        for base_idx in range(len(base)):
+            sample = base[base_idx]
+            recording_id = str(sample["recording_id"])
+            if recording_id not in label_cache:
+                label_cache[recording_id] = provider.get_channel_labels(recording_id)
+            recording_labels = label_cache[recording_id]
+            n_channels = len(sample["channel_ids"])
+            if recording_labels is None:
+                channel_labels = np.full(n_channels, int(sample["y"]), dtype=np.int64)
+            else:
+                channel_indices = sample.get("channel_indices")
+                if channel_indices is None:
+                    # Fall back to the provider's id order when a preprocessor
+                    # dropped channel_indices.
+                    if recording_id not in index_cache:
+                        ids = np.asarray(
+                            provider.get_channel_metadata(recording_id)["ids"]
+                        ).astype(str)
+                        index_cache[recording_id] = {
+                            cid: i for i, cid in enumerate(ids)
+                        }
+                    lookup = index_cache[recording_id]
+                    channel_indices = [
+                        lookup[str(cid)] for cid in sample["channel_ids"]
+                    ]
+                channel_indices = np.asarray(channel_indices, dtype=np.int64).reshape(
+                    -1
+                )
+                channel_labels = np.asarray(recording_labels, dtype=np.int64)[
+                    channel_indices
+                ]
+            for pos, label in enumerate(channel_labels.tolist()):
+                if label < 0 and not self.keep_unlabeled:
+                    continue
+                base_positions.append(base_idx)
+                channel_positions.append(pos)
+                labels_out.append(int(label))
+        self._base_positions = np.asarray(base_positions, dtype=np.int64)
+        self._channel_positions = np.asarray(channel_positions, dtype=np.int64)
+        self._labels = np.asarray(labels_out, dtype=np.int64)
+
+    def __len__(self) -> int:
+        return int(self._labels.shape[0])
+
+    def __getattr__(self, name: str) -> Any:
+        # Everything this view does not define (window_slicing_policy, the
+        # provider key, ...) is answered by the wrapped split.
+        if name == "base" or name.startswith("__"):
+            raise AttributeError(name)
+        return getattr(self.base, name)
+
+    @staticmethod
+    def _take(value: Any, pos: int) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, list):
+            return [value[pos]]
+        return value[pos : pos + 1]
+
+    def __getitem__(self, idx: int) -> dict[str, Any]:
+        base_idx = int(self._base_positions[idx])
+        pos = int(self._channel_positions[idx])
+        sample = self.base[base_idx]
+        out = dict(sample)
+        out["x"] = sample["x"][pos : pos + 1]
+        out["y"] = int(self._labels[idx])
+        for key in (
+            "channel_ids",
+            "channel_names",
+            "channel_coords",
+            "seq_id",
+            "channel_indices",
+            "brain_areas",
+        ):
+            if key in sample:
+                out[key] = self._take(sample[key], pos)
+        out["sample_idx"] = int(idx)
+        out["base_sample_idx"] = base_idx
+        out["single_channel_sample"] = True
+        return out
+
+    def is_materialized(self) -> bool:
+        return True
+
+    def iter_preprocess_fit_samples(self) -> Iterable[dict[str, Any]]:
+        return (self[i] for i in range(len(self)))
+
+    def sample_labels(self) -> np.ndarray:
+        """Label of every single-channel sample (used by the balanced sampler)."""
+        return self._labels.copy()
+
+    def label_counts(self) -> dict[int, int]:
+        values, counts = np.unique(self._labels, return_counts=True)
+        return {int(v): int(c) for v, c in zip(values, counts, strict=True)}
+
+    def get_split_summary(self) -> dict[str, Any]:
+        summary = dict(self.base.get_split_summary())
+        summary["n_windows"] = int(len(self.base))
+        summary["n_samples"] = len(self)
+        summary["single_channel"] = True
+        summary["single_channel_label_counts"] = {
+            str(k): v for k, v in self.label_counts().items()
+        }
+        return summary
+
+
+def _maybe_expand_single_channel_splits(
+    split_datasets: dict[str, Any], *, fold_idx: int
+) -> dict[str, Any]:
+    """Wrap each split whose provider asks for the single-channel protocol."""
+    out = dict(split_datasets)
+    for split in ("train", "val", "test"):
+        dataset = split_datasets[split]
+        provider = getattr(dataset, "provider", None)
+        if not bool(getattr(provider, "single_channel", False)):
+            continue
+        keep_unlabeled = bool(getattr(provider, "keep_unlabeled_test_channels", False))
+        wrapped = SingleChannelSplitDataset(
+            dataset, provider=provider, keep_unlabeled=keep_unlabeled
+        )
+        log(
+            f"Fold {fold_idx} {split} split expanded to single-channel samples: "
+            f"{len(dataset)} windows -> {len(wrapped)} channel windows, "
+            f"labels={wrapped.label_counts()}",
+            priority=0,
+        )
+        out[split] = wrapped
+    return out
+
+
 def build_neuroprobe_torch_fold(
     dataset_cfg: Any,
     preprocessor,
@@ -2977,7 +3223,10 @@ def build_neuroprobe_torch_fold(
     if needs_pool is None:
         requires_aligned = getattr(dataset_cfg, "requires_aligned_channels", True)
         needs_pool = needs_region_intersection_pool(
-            dataset_provider, regime, requires_aligned
+            dataset_provider,
+            regime,
+            requires_aligned,
+            single_channel=dataset_single_channel(dataset_cfg),
         )
     brain_area_key = _resolve_dataset_brain_area_key(
         dataset_cfg,
@@ -3753,6 +4002,14 @@ def build_neuroprobe_torch_fold(
                 train_source_datasets,
                 train_sources=active_train_sources,
             )
+    if not uses_train_sources:
+        # Single-channel providers (the Omni-iEEG protocol) expand the
+        # materialized windows into one sample per channel. This runs after
+        # the preprocessed split cache is written, so the cache keeps the
+        # compact per-window samples.
+        split_datasets = _maybe_expand_single_channel_splits(
+            split_datasets, fold_idx=fold_idx
+        )
     log_fold_split_sample_counts(
         split_datasets, fold_idx=fold_idx, phase="materialized"
     )

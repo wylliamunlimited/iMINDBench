@@ -13,6 +13,13 @@ runtime:
   preprocessed_split_cache_enabled: false
   preprocessed_split_cache_dir: ${paths.preprocessed_split_cache_dir}
   preprocessed_split_cache_mode: read_write
+  # Opt-in: write the per-window test predictions of every fold to
+  # test_predictions[_fold<k>].csv in the run directory. The Omni-iEEG scorers
+  # read that file; off by default.
+  save_test_predictions: false
+  # Opt-in: add the channel ids/names and the raw class logits to that file
+  # (needed by the Omni-iEEG single-channel scorer).
+  save_test_prediction_details: false
 
 runner:
   num_workers: 4
@@ -20,3 +27,10 @@ runner:
   persistent_workers: true
   prefetch_factor: 2  # Used only when num_workers > 0.
   coord_index_policy: legacy_truncation  # round_clamp | legacy_truncation
+  # Label whose samples are kept for their predictions but excluded from the
+  # trained classes and the metrics (Omni-iEEG single-channel SOZ test channels
+  # use -1). null disables this.
+  ignore_label: null
+  # shuffle (default) | balanced: a class-balanced WeightedRandomSampler over the
+  # train split, as in the official Omni-iEEG trainers.
+  train_sampler: shuffle

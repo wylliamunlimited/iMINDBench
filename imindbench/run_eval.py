@@ -16,6 +16,7 @@ from imindbench.sklearn_runner import SKLearnRunner
 from imindbench.torch_runner import TorchRunner
 from imindbench.utils import fold_helpers, logging_utils
 from imindbench.utils.pipeline_contracts import (
+    dataset_single_channel,
     needs_region_intersection_pool,
     resolve_provider_n_folds,
     validate_eval_config,
@@ -168,7 +169,10 @@ def _run_processed_evaluation(
     dataset_provider = dataset_cfg.provider
     requires_aligned = cfg.model.requires_aligned_channels
     needs_pool = needs_region_intersection_pool(
-        dataset_provider, regime, requires_aligned
+        dataset_provider,
+        regime,
+        requires_aligned,
+        single_channel=dataset_single_channel(dataset_cfg),
     )
     n_folds = resolve_provider_n_folds(
         dataset_provider=dataset_provider,

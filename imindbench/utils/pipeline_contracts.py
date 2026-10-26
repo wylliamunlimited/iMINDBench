@@ -88,6 +88,22 @@ def _require_torch_brain_miller_ecog_2019():
     return MillerECoG2019
 
 
+def _require_torch_brain_omni_ieeg():
+    # The Omni-iEEG loader lands in torch_brain.datasets (the pipeline layout);
+    # the brainsets fork that first carried it is accepted as a fallback.
+    try:
+        from torch_brain.datasets import OmniIEEG
+    except ImportError:
+        try:
+            from brainsets.datasets import OmniIEEG
+        except ImportError as exc:
+            raise ImportError(
+                "Processed provider 'omni_ieeg' requires torch_brain.datasets (or "
+                "brainsets.datasets) with OmniIEEG."
+            ) from exc
+    return OmniIEEG
+
+
 # =========================
 # Routing
 # =========================
@@ -160,6 +176,26 @@ _PROVIDER_SPECS: dict[str, dict[str, Any]] = {
         },
         "valid_subset_tiers": {"full"},
     },
+    # Omni-iEEG (epilepsy sEEG/ECoG, Hugging Face Omni-iEEG/Omni-iEEG). The
+    # official protocol pools the whole held-out set into one cell, addressed
+    # as test_subject=all / test_session=all, and its dataset class takes its
+    # task settings (window length, split tables, single-channel mode) through
+    # dataset.provider_options. The stored signal is in microvolts; the
+    # dataset ships no electrode positions.
+    "omni_ieeg": {
+        "signal_unit": "uV",
+        "electrode_subtype": "depth",
+        "dataset_class_loader": _require_torch_brain_omni_ieeg,
+        "supports_regression": False,
+        # dataset.test_subject / test_session are ids or "all", not indices.
+        "pooled_test_ids": True,
+        # dataset.provider_options is forwarded to the dataset class.
+        "accepts_provider_options": True,
+        "regime_is_multi_subject": {
+            "hold-out-subject": True,
+        },
+        "valid_subset_tiers": {"full"},
+    },
 }
 
 
@@ -196,16 +232,38 @@ def is_multi_subject(provider: str, regime: str) -> bool:
     return _get_provider_spec(provider)["regime_is_multi_subject"][regime]
 
 
+def dataset_single_channel(dataset_cfg: Any) -> bool:
+    """Whether the dataset uses the single-channel protocol.
+
+    ``dataset.provider_options.single_channel`` (Omni-iEEG) expands every
+    window into one sample per channel, so every sample has exactly one
+    channel whatever the subject.
+    """
+    getter = getattr(dataset_cfg, "get", None)
+    options = getter("provider_options", None) if callable(getter) else None
+    if options is None or not hasattr(options, "get"):
+        return False
+    return bool(options.get("single_channel", False))
+
+
 def needs_region_intersection_pool(
-    provider: str, regime: str, requires_aligned_channels: bool
+    provider: str,
+    regime: str,
+    requires_aligned_channels: bool,
+    *,
+    single_channel: bool = False,
 ) -> bool:
     """Whether the (provider, regime, model) combo needs region-intersection pooling.
 
     Region-intersection pooling is needed when the regime is multi-subject AND
-    the model requires aligned channels.
+    the model requires aligned channels. Single-channel samples (see
+    ``dataset_single_channel``) are aligned by construction, so they never
+    need it.
 
     Call only after validate_eval_config has passed.
     """
+    if single_channel:
+        return False
     return is_multi_subject(provider, regime) and requires_aligned_channels
 
 
@@ -314,9 +372,20 @@ def build_processed_split_provider(
     """Instantiate one split provider object via dataset.provider."""
     dataset_cls = get_dataset_class(dataset_provider)
 
+    # Dataset-specific settings (Omni-iEEG window length, split tables, ...)
+    # travel in dataset.provider_options and are forwarded as keyword
+    # arguments. Datasets without the key are constructed exactly as before.
+    provider_options = dataset_cfg.get("provider_options", None)
+    extra_kwargs = (
+        OmegaConf.to_container(provider_options, resolve=True)
+        if isinstance(provider_options, DictConfig)
+        else dict(provider_options or {})
+    )
+
     # Constructor kwargs are intentionally mirrored from dataset_cfg so this
     # helper stays a thin adapter over dataset-class APIs.
     return dataset_cls(
+        **extra_kwargs,
         root=dataset_cfg.root,
         dirname=dataset_cfg.dirname,
         subset_tier=dataset_cfg.subset_tier,
@@ -348,7 +417,36 @@ VALID_COORDINATE_PROFILES = {
     "popt_zero",
     "popt_miller",
     "diver_mni_miller",
+    # Omni-iEEG ships no electrode positions: every model sees the all-zero
+    # frame the dataset class provides (DIVER's "unknown position" input).
+    "omni_none",
 }
+
+
+def _validate_provider_options(
+    dataset_cfg: dict[str, Any], *, provider: str | None = None
+) -> None:
+    """dataset.provider_options: a mapping, only for datasets that take one."""
+    options = dataset_cfg.get("provider_options", None)
+    if options is None:
+        return
+    if not isinstance(options, dict):
+        raise TypeError(
+            "dataset.provider_options must be a mapping when set, got "
+            f"{type(options).__name__}."
+        )
+    if provider in _PROVIDER_SPECS and not _get_provider_spec(provider).get(
+        "accepts_provider_options", False
+    ):
+        accepting = sorted(
+            name
+            for name, spec in _PROVIDER_SPECS.items()
+            if spec.get("accepts_provider_options", False)
+        )
+        raise ValueError(
+            f"dataset.provider_options is not accepted by dataset.provider='{provider}'. "
+            f"Providers that take it: {accepting}."
+        )
 
 
 def _validate_label_mode(label_mode: str, *, provider: str | None = None) -> None:
@@ -1209,9 +1307,16 @@ def validate_eval_config(cfg: DictConfig) -> None:
     _require_non_empty_dataset_str(dataset_cfg, "root")
     _require_non_empty_dataset_str(dataset_cfg, "dirname")
     _require_non_empty_dataset_str(dataset_cfg, "task")
-    _require_dataset_int(dataset_cfg, "test_subject")
-    _require_dataset_int(dataset_cfg, "test_session")
     provider = _require_non_empty_dataset_str(dataset_cfg, "provider")
+    if _PROVIDER_SPECS.get(provider, {}).get("pooled_test_ids", False):
+        # One pooled cell over the held-out set (Omni-iEEG): the ids are the
+        # dataset's own labels or "all", not positions in a list.
+        _require_non_empty_dataset_str(dataset_cfg, "test_subject")
+        _require_non_empty_dataset_str(dataset_cfg, "test_session")
+    else:
+        _require_dataset_int(dataset_cfg, "test_subject")
+        _require_dataset_int(dataset_cfg, "test_session")
+    _validate_provider_options(dataset_cfg, provider=provider)
     _validate_label_mode(
         _require_non_empty_dataset_str(dataset_cfg, "label_mode"), provider=provider
     )
@@ -1350,12 +1455,20 @@ def validate_eval_config(cfg: DictConfig) -> None:
         )
 
     # Derive region-intersection pooling need from (dataset, regime, model).
-    pool = needs_region_intersection_pool(provider, regime, requires_aligned)
+    pool = needs_region_intersection_pool(
+        provider,
+        regime,
+        requires_aligned,
+        single_channel=dataset_single_channel(dataset_cfg),
+    )
     if pool and dataset_brain_area_key is None:
         raise ValueError(
             "dataset.brain_area_key is required when the regime is multi-subject "
             f"and model.requires_aligned_channels is true "
-            f"(dataset.provider='{provider}', dataset.regime='{regime}')."
+            f"(dataset.provider='{provider}', dataset.regime='{regime}'). "
+            "Variable-channel models (model.requires_aligned_channels=false) and "
+            "the single-channel protocol (dataset.provider_options.single_channel="
+            "true) need no pooling."
         )
 
     # -- preprocessor --
