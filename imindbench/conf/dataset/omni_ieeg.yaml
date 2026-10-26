@@ -1,0 +1,39 @@
+# Omni-iEEG, multi-channel protocol (dataset class OmniIEEG, from the omni_ieeg
+# brainsets pipeline): one sample is one window of one recording with all of its
+# good channels, ictal vs interictal. Use dataset=omni_ieeg_single_channel for
+# the official (single-channel) protocol and the other four tasks.
+#
+# One pooled cell over the whole held-out test set, as in the upstream benchmark:
+# test_subject and test_session are both "all" (the launcher target is `all`).
+# Train and test patients come from the official split tables; validation is a
+# subject-disjoint slice of the train patients.
+root: ${paths.dataset_root}
+dirname: omni_ieeg
+provider: omni_ieeg
+window_slicing_policy: ceil  # ceil | legacy_floor
+subset_tier: full
+label_mode: binary
+task: ictal_interictal
+test_subject: all
+test_session: all
+regime: hold-out-subject
+# Omni-iEEG ships no electrode positions: every model sees NaN coordinates.
+coordinate_profile: omni_none
+train_same_subject_only: false
+train_sample_fraction: 1.0
+max_train_samples_per_subject: null
+decodable_subject_sessions_only: false
+brain_area_key: null
+destrieux_brain_area_key: null
+uniquify_channel_ids_with_subject: true
+uniquify_channel_ids_with_session: true
+merge_val_into_test: false
+# Settings of the OmniIEEG dataset class, forwarded to it as keyword arguments.
+provider_options:
+  single_channel: false               # multi-channel protocol (see omni_ieeg_single_channel)
+  window_sec: 60.0                    # decision window: 60 (paper unit) or 1 (short windows)
+  edge_trim_sec: 1.0                  # upstream skips the first and last second
+  split_protocol: ictal_cross         # ictal_cross (ictal_split_cross.csv) | final_split
+  split_csv: ${paths.omni_ictal_split_csv}
+  train_seconds_per_recording: 600.0  # train budget per recording (10 x 60 s or 600 x 1 s)
+  val_fraction: 0.2                   # subject-disjoint val carved from the train patients

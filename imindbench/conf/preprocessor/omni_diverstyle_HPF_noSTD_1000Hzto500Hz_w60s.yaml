@@ -1,0 +1,17 @@
+# Same chain as the w1s variant, for dataset.provider_options.window_sec=60.
+# context_window_sec must cover the target window; 90 s leaves 15 s of filter
+# context on each side of a 60 s window.
+chain:
+  - name: context_window
+    context_window_sec: 90.0
+    sampling_rate: 1000
+
+  - name: time_domain_filter_diver_style
+    sampling_rate: 1000
+    notch_freqs: [60, 120, 180]
+
+  - name: crop_to_target_window
+
+  - name: resample
+    source_rate: 1000
+    target_rate: 500

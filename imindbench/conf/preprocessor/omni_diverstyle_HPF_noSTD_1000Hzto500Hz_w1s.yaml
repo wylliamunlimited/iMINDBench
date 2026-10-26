@@ -1,0 +1,18 @@
+# Omni-iEEG counterpart of laplacian_wav_diverstyle_HPF_noSTD_long_context_15s_1000Hzto500Hz.
+# No laplacian_rereference: Omni-iEEG channels are already bipolar or
+# average-referenced (e.g. "LE1-LE2"), so Laplacian neighbour matching would drop
+# every channel. Use with dataset.provider_options.window_sec=1.
+chain:
+  - name: context_window
+    context_window_sec: 15.0
+    sampling_rate: 1000
+
+  - name: time_domain_filter_diver_style
+    sampling_rate: 1000
+    notch_freqs: [60, 120, 180]
+
+  - name: crop_to_target_window
+
+  - name: resample
+    source_rate: 1000
+    target_rate: 500
