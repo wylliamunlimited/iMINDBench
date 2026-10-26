@@ -1,0 +1,13 @@
+# Omni-iEEG annotated HFO events (dataset.task=hfo, 2 s windows at 1000 Hz).
+# The events are standalone waveforms laid end to end in the omni_ieeg_hfo files,
+# so there is no real signal around a window: no context_window stage (it would
+# pull neighbouring, unrelated events into the filter). Same DIVER-style filters
+# as the other Omni-iEEG chains, applied to the 2 s window itself.
+chain:
+  - name: time_domain_filter_diver_style
+    sampling_rate: 1000
+    notch_freqs: [60, 120, 180]
+
+  - name: resample
+    source_rate: 1000
+    target_rate: 500

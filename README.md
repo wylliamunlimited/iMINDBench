@@ -47,11 +47,13 @@ brainsets prepare neuroprobe_2025 --raw-dir /path/to/raw --processed-dir /path/t
 | Bang! You're Dead | `keles_byd_2024` | `kelesbyd2024` | 29 |
 | PIPPI | `berezutskaya_pippi_2022` | `berezutskayapippi2022` | 5 |
 | Miller ECoG library (2019) | `miller_ecog_library_2019` | `millerecog2019` | 57 |
+| Omni-iEEG | `omni_ieeg` (+ `omni_ieeg_hfo` for the HFO task) | `omni_ieeg_single_channel`, `omni_ieeg` | 1 pooled cell per task |
 
 Prepare each dataset into the same processed root to run the complete benchmark.
-Miller also needs a torch_brain that provides `torch_brain.datasets.MillerECoG2019`;
-the torch_brain version pinned above does not have it yet, and the pin will be
-updated when it does.
+Miller also needs a torch_brain that provides `torch_brain.datasets.MillerECoG2019`,
+and Omni-iEEG one that provides `torch_brain.datasets.OmniIEEG` (or
+`brainsets.datasets.OmniIEEG`); the torch_brain version pinned above has
+neither yet, and the pin will be updated when it does.
 Each pipeline creates its own named subdirectory. Neuroprobe2025 and NeuroprobeV2
 use the same prepared artifacts through different dataset views.
 
@@ -63,8 +65,9 @@ cp imindbench/conf/paths/example.yaml /path/to/config/paths/local.yaml
 ```
 
 Set `dataset_root: /path/to/processed` and `dataset_dirname: neuroprobe_2025`.
-BYD, PIPPI and Miller configs select their own subdirectories under that root. These two
-fields are enough for the first baseline. Add checkpoint/cache paths only when
+BYD, PIPPI, Miller and Omni-iEEG configs select their own subdirectories under
+that root (Omni-iEEG also needs its split tables; see [Omni-iEEG](#omni-ieeg)).
+These two fields are enough for the first baseline. Add checkpoint/cache paths only when
 needed; omitted optional resources inherit packaged `null` defaults.
 
 ### 4. Run a first model
@@ -89,11 +92,12 @@ We provide scripts to run for each dataset:
 | [run_kelesbyd2024.sh](scripts/run_kelesbyd2024.sh) | BYD: within-session and optional transfer |
 | [run_berezutskayapippi2022.sh](scripts/run_berezutskayapippi2022.sh) | PIPPI: within-session and optional transfer |
 | [run_millerecog2019.sh](scripts/run_millerecog2019.sh) | Miller: within-session main table and optional Miller tracks (see [Miller ECoG library](#miller-ecog-library)) |
+| [run_omni_ieeg.sh](scripts/run_omni_ieeg.sh) | Omni-iEEG: the five single-channel tasks, one pooled cell each, plus their scorer (see [Omni-iEEG](#omni-ieeg)) |
 
 Open the script for your dataset. Each file lists all benchmark subject/session
-pairs and all 15 tasks (Miller has its own tasks; see
-[Miller ECoG library](#miller-ecog-library)); the default model is Logistic
-with multi-STFT inputs.
+pairs and all 15 tasks (Miller and Omni-iEEG have their own tasks; see
+[Miller ECoG library](#miller-ecog-library) and [Omni-iEEG](#omni-ieeg)); the
+default model is Logistic with multi-STFT inputs.
 
 | Setting | Where to edit it |
 | --- | --- |
@@ -157,6 +161,7 @@ evaluations per model/input pairing**, before folds.
 - Scripts own the task/target selections; coverage tests check that launch previews
   match those explicit lists.
 - Miller is counted separately: its main table has 178 cells (see below).
+- Omni-iEEG is counted separately: one pooled cell per task, five tasks (see below).
 
 ### Miller ECoG library
 
@@ -379,6 +384,10 @@ reads across all splits and training sources:
   before rounding both boundaries up.
 - `legacy_floor`: floor both boundaries without snapping, relative to the
   recording's time origin, matching the former historical diagnostic launcher.
+- `exact_count`: the `ceil` read, then exactly `round(duration * rate)` samples
+  (re-read with a short right margin when the start is off the sample grid,
+  truncated when the window runs past the recording). This is the fixed sample
+  count upstream extractors take; the Omni-iEEG datasets use it.
 
 Historical mode preserves the existing context placement and crop calculations;
 it changes waveform reads, as the former diagnostic did. It does not establish
@@ -475,6 +484,82 @@ validation rejects the retired spelling. Use a fresh output root when migrating.
 - The loader calls within-dataset training `hold-in-session`.
 
 </details>
+
+### Omni-iEEG
+
+[run_omni_ieeg.sh](scripts/run_omni_ieeg.sh) runs
+[Omni-iEEG](https://github.com/Omni-iEEG/Omni-iEEG), an epilepsy iEEG benchmark
+whose official protocol is **single-channel**: every (recording, channel,
+window) is one sample, and each task re-aggregates the per-channel predictions
+its own way. It differs from the other scripts in four ways:
+
+1. **One pooled cell per task.** The upstream split is patient-disjoint, so a
+   task is one evaluation over every held-out patient: the launcher target is
+   `all` (`dataset.test_subject=all`, `dataset.test_session=all`), the regime
+   is `hold-out-subject`, and there is a single fold. The dataset class
+   carves a subject-disjoint validation set out of the train patients.
+2. **Per-task settings.** Each task has its own window length, split table and
+   label mode, so the script launches the tasks one at a time with the settings
+   below, then scores every finished cell with
+   `python -m imindbench.omni_ieeg_scoring`.
+3. **Channels.** Windows are preprocessed per recording and then expanded into
+   one sample per channel (`dataset=omni_ieeg_single_channel`,
+   `dataset.provider_options.single_channel: true`), so every model, aligned-
+   channel baselines included, sees one channel at a time. The multi-channel
+   view `dataset=omni_ieeg` (every channel of a window as one sample) needs a
+   variable-channel model, since Omni-iEEG has no brain areas to pool by.
+4. **Coordinates.** Omni-iEEG ships no electrode positions, so
+   `dataset.coordinate_profile` defaults to `omni_none` (every channel at the
+   origin) for models that need coordinates.
+
+| Task | Samples | Label | Window | Script settings | Scorer output (upstream source) |
+| --- | --- | --- | ---: | --- | --- |
+| `ictal_interictal` | good channels of the `ictal_split_cross.csv` recordings | recording label, interictal = 1 | 60 s | binary, `omni_ictal_split_csv`, selection by val AUROC | per-window mean of the channel logits, then AUC, macro P/R/F1 and balanced accuracy at the Youden threshold (`ictal_sleep/evaluation.py`) |
+| `sleep_awake` | same, `sleep_split_cross.csv` | sleep = 1 | 60 s | binary, `omni_sleep_split_csv`, selection by val AUROC | same |
+| `soz_outcome` | interictal recordings of `final_split.csv` | 1 = non-resected channel of a seizure-free patient, 0 = SOZ, -1 = unlabelled (test only) | 60 s | binary, `runner.ignore_label=-1` | channel-level AUC, PR-AUC, macro P/R/F1, specificity; patient-level resection-ratio AUC / PR-AUC (`benchmark/evaluation_channel.py`) |
+| `anatomical` | every channel with a mapped region | 5 lobes (frontal, temporal, parietal, occipital, limbic) | 300 s | multiclass, selection by val macro-F1 | per-channel sum of the class probabilities, then macro P/R/F1, accuracy, balanced accuracy (`anatomical/evaluation.py`) |
+| `hfo` | annotated HFO events | 3 classes (artifact, real HFO, spike HFO) | 2 s | multiclass, `edge_trim_sec=0`, selection by val macro-F1 | argmax, then accuracy and macro P/R/F1 (`event_model/benchmark/benchmark.py`) |
+
+Every launch also sets `runtime.save_test_predictions=true`, which writes each
+test (recording, channel, window) with its channel name, class probabilities
+and logits to `test_predictions.csv` next to the result JSON, and
+`runner.train_sampler=balanced`, the upstream class-balanced training sampler.
+The scorer reads that file and writes `omni_sc_metrics.json`; **the
+per-channel-window AUROC in the result JSON is not an Omni-iEEG metric**,
+report the scorer's numbers. `soz_outcome` scoring also needs the official
+`final_split.csv` and the raw BIDS tree (`*_channels.tsv`), from
+`paths.omni_final_split_csv` and `paths.omni_raw_root`.
+
+Settings of the OmniIEEG dataset class travel in `dataset.provider_options`
+and are forwarded to it as keyword arguments (window length, edge trim, split
+tables, the train-window sampling rule, validation fraction). The comments in
+`imindbench/conf/dataset/omni_ieeg_single_channel.yaml` list them.
+
+Prepare the data with brainsets, then point `paths/local.yaml` at the split
+tables (`omni_ictal_split_csv`, `omni_sleep_split_csv`, `omni_final_split_csv`,
+`omni_anatomical_mapping_csv`; `omni_raw_root` for `soz_outcome` scoring). The
+processed `omni_ieeg/` and `omni_ieeg_hfo/` directories live under
+`dataset_root`:
+
+```bash
+brainsets prepare omni_ieeg --raw-dir /path/to/raw --processed-dir /path/to/processed
+brainsets prepare omni_ieeg_hfo --raw-dir /path/to/raw --processed-dir /path/to/processed  # hfo only
+```
+
+Omni-iEEG needs a torch_brain that provides `torch_brain.datasets.OmniIEEG`
+(the loader falls back to `brainsets.datasets.OmniIEEG`); the pinned
+torch_brain does not have it yet, and the pin will be updated when it does.
+Memory: `soz_outcome` and `anatomical` hold tens of GB of preprocessed
+windows in RAM; run them on a large-memory node, or enable the preprocessed
+split cache.
+
+The script's `omni_*` presets apply the DIVER-style filters to the whole
+window (with 15 s of filter context on each side for the 60 s and 300 s
+windows, none for the standalone HFO events) and resample 1000 Hz to 500 Hz.
+Two optional blocks run the earlier multi-channel ictal-vs-interictal
+protocols: a 1 s-window benchmark scored by per-window AUROC, and the 60 s
+"paper" protocol scored by `python -m imindbench.omni_ieeg_paper_scoring`
+(Omni-iEEG-comparable AUC, macro-F1 and balanced accuracy).
 
 ## Pretrained weights
 

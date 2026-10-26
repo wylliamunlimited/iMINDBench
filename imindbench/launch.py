@@ -196,10 +196,15 @@ def build_commands(args):
     tasks = args.task
     targets = {}
     for target in args.target:
+        if target == "all":
+            # One pooled cell over the whole held-out set (Omni-iEEG).
+            targets[target] = ("all", "all")
+            continue
         match = re.fullmatch(r"sub(0|[1-9][0-9]*)_sess(0|[1-9][0-9]*)", target)
         if match is None:
             raise ValueError(
-                f"Invalid target {target!r}; expected sub<S>_sess<T> (e.g. sub1_sess1)"
+                f"Invalid target {target!r}; expected sub<S>_sess<T> (e.g. sub1_sess1) "
+                "or all"
             )
         targets[target] = tuple(int(value) for value in match.groups())
     # Each selection file keeps only the task/target pairs it lists. With both

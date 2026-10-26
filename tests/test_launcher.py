@@ -214,10 +214,20 @@ def test_explicit_selections_do_not_require_catalog_membership():
     assert overrides["dataset.test_session"] == "2"
 
 
-@pytest.mark.parametrize("target", ["all", "sub1", "sub01_sess1", "sub1_sess-1"])
+@pytest.mark.parametrize("target", ["sub1", "sub01_sess1", "sub1_sess-1", "ALL"])
 def test_invalid_target_syntax_is_rejected(target):
     with pytest.raises(ValueError, match="Invalid target"):
         launch.build_commands(_args("--target", target))
+
+
+def test_target_all_is_the_pooled_held_out_set():
+    # Omni-iEEG runs one cell over every held-out patient (dataset.test_subject=all).
+    jobs = launch.build_commands(_args("--target", "all"))
+    assert len(jobs) == 1
+    overrides = _overrides(jobs[0]["command"])
+    assert overrides["dataset.test_subject"] == "all"
+    assert overrides["dataset.test_session"] == "all"
+    assert jobs[0]["run_dir"].endswith("/all")
 
 
 @pytest.mark.parametrize("missing", ["--task", "--target"])

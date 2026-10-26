@@ -23,12 +23,31 @@ Notable changes and upgrade actions are recorded here.
   `regression_head_lambda_mode`, declared for every model.
 - `miller_*` preprocessor presets (no filtering or re-referencing) and the
   coordinate profiles `popt_zero`, `popt_miller` and `diver_mni_miller`.
+- Omni-iEEG as a sixth dataset, `omni_ieeg` and `omni_ieeg_single_channel`,
+  with `scripts/run_omni_ieeg.sh`: the five single-channel tasks
+  (`ictal_interictal`, `sleep_awake`, `soz_outcome`, `anatomical`, `hfo`) as
+  one pooled cell each (launcher target `all`, regime `hold-out-subject`),
+  and the scorers `imindbench.omni_ieeg_scoring` (literal ports of the
+  upstream evaluation scripts) and `imindbench.omni_ieeg_paper_scoring`.
+  Original implementation by Joan Lara Formoso in the torch_brain and
+  DIVER_pretrain evaluation code.
+- `dataset.provider_options`, forwarded to the dataset class as keyword
+  arguments for providers that accept them; the single-channel protocol
+  (`provider_options.single_channel`), which expands preprocessed windows into
+  one sample per channel and skips region-intersection pooling;
+  `runner.ignore_label`, `runner.train_sampler: balanced` and
+  `runtime.save_test_predictions` (per-window test predictions with channel
+  names and logits); `dataset.window_slicing_policy: exact_count` (exactly
+  `round(duration * rate)` samples per window); the `omni_*` preprocessor
+  presets and the coordinate profile `omni_none`.
 
 ### Upgrade notes
 
-- Miller needs a torch_brain that provides `torch_brain.datasets.MillerECoG2019`.
-  The pinned torch_brain does not have it yet; the pin will be updated in a
-  later release. The other datasets are unchanged.
+- Miller needs a torch_brain that provides `torch_brain.datasets.MillerECoG2019`,
+  and Omni-iEEG one that provides `torch_brain.datasets.OmniIEEG` (or a
+  `brainsets.datasets.OmniIEEG`). The pinned torch_brain has neither yet; the
+  pin will be updated in a later release. The other datasets are unchanged.
+- `pandas` is now a declared dependency (the Omni-iEEG scorers use it).
 - Result JSONs of the existing datasets keep their shape. The new dataset
   options (`label_mode`, `class_pair`, `fold_subset`,
   `regression_target_last_samples`, matched train subsets) are added to the

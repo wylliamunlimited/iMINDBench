@@ -30,6 +30,18 @@ DEFAULT_RESULTS_TIME_BIN = "one_second_after_onset"
 PUBLIC_SUBJECT_KEY_PREFIX = "btbank"
 
 
+def int_or_str(value):
+    """``int(value)`` for numeric ids, else the id as a string.
+
+    Most datasets use integer subject/session ids; Omni-iEEG uses BIDS labels
+    such as ``sub-hupHUP064`` and the pooled sentinel ``all``.
+    """
+    text = str(value).strip()
+    if text.lstrip("-").isdigit():
+        return int(text)
+    return text
+
+
 def set_verbose(value):
     """Set global verbose flag."""
     # Module-level flag keeps logging behavior consistent across imports without
@@ -123,25 +135,33 @@ def build_internal_time_bins(results_population: dict) -> list[dict]:
     return time_bins
 
 
+def resolve_run_output_dir() -> str | None:
+    """Hydra's runtime output directory (created), or None outside a Hydra run.
+
+    Everything a run writes (result JSON, test predictions) goes there, next to
+    `.hydra/` and `run_eval.log`.
+    """
+    if not HydraConfig.initialized():
+        return None
+    file_save_dir = str(HydraConfig.get().runtime.output_dir)
+    os.makedirs(file_save_dir, exist_ok=True)
+    return file_save_dir
+
+
 def resolve_result_output_path(
     *,
     eval_name: str,
     subject_id: int,
     trial_id: int,
 ) -> str:
-    """Resolve final JSON output path for one evaluation run.
-
-    Writes into Hydra's runtime output directory so JSON results live next to
-    `.hydra/` and `run_eval.log` for the same run.
-    """
-    if not HydraConfig.initialized():
+    """Resolve final JSON output path for one evaluation run."""
+    file_save_dir = resolve_run_output_dir()
+    if file_save_dir is None:
         raise RuntimeError(
             "Hydra runtime is not initialized; cannot resolve result output path. "
             "Run via the Hydra entrypoint (run_eval.py) or initialize Hydra "
             "before calling evaluation helpers."
         )
-    file_save_dir = str(HydraConfig.get().runtime.output_dir)
-    os.makedirs(file_save_dir, exist_ok=True)
     return os.path.join(
         file_save_dir,
         resolve_public_result_filename(
@@ -324,8 +344,8 @@ def build_internal_eval_result(
         "provider": str(provider),
         "task": str(task),
         "regime": str(regime),
-        "test_subject": int(subject_id),
-        "test_session": int(trial_id),
+        "test_subject": int_or_str(subject_id),
+        "test_session": int_or_str(trial_id),
         "model_name": str(model_name),
         "preprocess_type": str(preprocess_type),
         "time_bins": build_internal_time_bins(results_population),

@@ -10,7 +10,7 @@ from contextlib import contextmanager
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from imindbench.models import build_model
 from imindbench.torch_runner import TorchRunner
@@ -25,6 +25,7 @@ from imindbench.utils.logging_utils import (
     log,
     log_fold_metrics,
 )
+from imindbench.utils.pipeline_contracts import runner_ignore_label
 
 
 def _normalize_preprocess_torch_num_threads(value) -> int | None:
@@ -206,10 +207,9 @@ def _find_unseen_eval_classes(
     )
 
 
-def collect_class_counts_from_loader(loader) -> dict[int, int]:
-    """Collect class-id counts from a split loader/dataset."""
-    samples = loader.dataset if isinstance(loader, DataLoader) else loader
-    class_counts: dict[int, int] = {}
+def _iter_sample_labels(samples) -> np.ndarray:
+    """Integer labels of dict samples/batches, validated one value at a time."""
+    labels: list[int] = []
     for raw_batch in samples:
         if not isinstance(raw_batch, dict) or "y" not in raw_batch:
             raise ValueError(
@@ -228,9 +228,29 @@ def collect_class_counts_from_loader(loader) -> dict[int, int]:
                 raise TypeError(
                     f"Class labels must be integers, got {type(value).__name__}."
                 )
-            label = int(value)
-            class_counts[label] = int(class_counts.get(label, 0) + 1)
-    return _sorted_class_counts(class_counts)
+            labels.append(int(value))
+    return np.asarray(labels, dtype=np.int64)
+
+
+def collect_class_counts_from_loader(loader, ignore_label=None) -> dict[int, int]:
+    """Collect class-id counts from a split loader/dataset.
+
+    Samples labelled ``ignore_label`` (channels kept only for their
+    predictions) are not counted as a class. Datasets that know their labels
+    up front (``sample_labels()``) are not iterated.
+    """
+    samples = loader.dataset if isinstance(loader, DataLoader) else loader
+    sample_labels = getattr(samples, "sample_labels", None)
+    if callable(sample_labels):
+        labels = np.asarray(sample_labels(), dtype=np.int64).reshape(-1)
+    else:
+        labels = _iter_sample_labels(samples)
+    if ignore_label is not None:
+        labels = labels[labels != ignore_label]
+    values, counts = np.unique(labels, return_counts=True)
+    return _sorted_class_counts(
+        {int(v): int(c) for v, c in zip(values, counts, strict=True)}
+    )
 
 
 def build_skipped_fold_result(
@@ -269,6 +289,41 @@ def _init_results_population():
     }
 
 
+def _split_labels(dataset) -> np.ndarray:
+    """Integer label of every sample of a split dataset."""
+    sample_labels = getattr(dataset, "sample_labels", None)
+    if callable(sample_labels):
+        return np.asarray(sample_labels(), dtype=np.int64)
+    return np.asarray(
+        [int(dataset[i]["y"]) for i in range(len(dataset))], dtype=np.int64
+    )
+
+
+def build_balanced_train_sampler(dataset, *, generator=None, ignore_label=None):
+    """Class-balanced sampler, as in the official Omni-iEEG trainers.
+
+    Upstream (``use_weighted_sampling=True``) draws ``len(train)`` samples with
+    replacement, each weighted by the inverse frequency of its class.
+    """
+    labels = _split_labels(dataset)
+    if labels.size == 0:
+        raise ValueError("Cannot build a balanced sampler for an empty train split.")
+    valid = np.ones(labels.shape, dtype=bool)
+    if ignore_label is not None:
+        valid = labels != ignore_label
+    _, inverse, counts = np.unique(
+        labels[valid], return_inverse=True, return_counts=True
+    )
+    weights = np.zeros(labels.shape, dtype=np.float64)
+    weights[valid] = 1.0 / counts[inverse.reshape(-1)]
+    return WeightedRandomSampler(
+        weights=torch.as_tensor(weights, dtype=torch.double),
+        num_samples=int(labels.size),
+        replacement=True,
+        generator=generator,
+    )
+
+
 def build_torch_split_loaders(
     fold: dict,
     cfg,
@@ -304,11 +359,26 @@ def build_torch_split_loaders(
         train_generator = torch.Generator()
         train_generator.manual_seed(seed)
 
+    train_sampler_mode = str(runner_cfg.get("train_sampler", "shuffle") or "shuffle")
+    if train_sampler_mode not in {"shuffle", "balanced"}:
+        raise ValueError(
+            "runner.train_sampler must be 'shuffle' or 'balanced', "
+            f"got '{train_sampler_mode}'."
+        )
+    train_sampler = None
+    if train_sampler_mode == "balanced":
+        train_sampler = build_balanced_train_sampler(
+            fold["train_split"],
+            generator=train_generator,
+            ignore_label=runner_ignore_label(cfg),
+        )
+
     train_loader = DataLoader(
         fold["train_split"],
         batch_size=batch_size,
-        shuffle=True,
-        generator=train_generator,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
+        generator=train_generator if train_sampler is None else None,
         num_workers=num_workers,
         pin_memory=pin_memory,
         persistent_workers=persistent_workers,
@@ -535,9 +605,10 @@ def evaluate_variable_fold(
             runner=runner,
             loaders=(train_loader, val_loader, test_loader),
         )
-    train_class_counts = collect_class_counts_from_loader(train_loader)
-    val_class_counts = collect_class_counts_from_loader(val_loader)
-    test_class_counts = collect_class_counts_from_loader(test_loader)
+    ignore_label = runner_ignore_label(cfg)
+    train_class_counts = collect_class_counts_from_loader(train_loader, ignore_label)
+    val_class_counts = collect_class_counts_from_loader(val_loader, ignore_label)
+    test_class_counts = collect_class_counts_from_loader(test_loader, ignore_label)
 
     if len(train_class_counts) < 2:
         return build_skipped_fold_result(

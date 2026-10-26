@@ -1,0 +1,52 @@
+# Omni-iEEG, the official single-channel protocol (dataset class OmniIEEG with
+# single_channel=true): every (recording, channel, window) is one sample, as in
+# the official Omni-iEEG repository. Windows are preprocessed per recording and
+# expanded into one sample per channel afterwards (SingleChannelSplitDataset).
+#
+# The five tasks and the settings scripts/run_omni_ieeg.sh passes for each:
+#   ictal_interictal  window 60 s,  split_csv = ictal_split_cross.csv, binary
+#   sleep_awake       window 60 s,  split_csv = sleep_split_cross.csv, binary
+#   soz_outcome       window 60 s,  final_split.csv, binary, runner.ignore_label=-1
+#   anatomical        window 300 s, final_split.csv + anatomical_mapping.csv, multiclass
+#   hfo               window 2 s,   omni_ieeg_hfo files, multiclass, edge_trim_sec 0
+#
+# One pooled cell over the whole held-out test set (launcher target `all`).
+root: ${paths.dataset_root}
+dirname: omni_ieeg
+provider: omni_ieeg
+# exact_count: every window holds exactly round(window_sec * rate) samples, the
+# fixed sample count the upstream extractors take (ceil would drop or add one
+# sample when a window start is off the sample grid).
+window_slicing_policy: exact_count  # ceil | legacy_floor | exact_count
+subset_tier: full
+label_mode: binary
+task: ictal_interictal
+test_subject: all
+test_session: all
+regime: hold-out-subject
+# Omni-iEEG ships no electrode positions: every model sees NaN coordinates.
+coordinate_profile: omni_none
+train_same_subject_only: false
+train_sample_fraction: 1.0
+max_train_samples_per_subject: null
+decodable_subject_sessions_only: false
+brain_area_key: null
+destrieux_brain_area_key: null
+uniquify_channel_ids_with_subject: true
+uniquify_channel_ids_with_session: true
+merge_val_into_test: false
+# Settings of the OmniIEEG dataset class, forwarded to it as keyword arguments.
+provider_options:
+  single_channel: true
+  split_protocol: auto                  # task -> ictal_cross | release_split | hfo_annotation
+  window_sec: 60.0                      # 60 (ictal/sleep/soz), 300 (anatomical), 2 (hfo)
+  edge_trim_sec: 1.0                    # upstream skips the first and last second (0 for hfo)
+  split_csv: ${paths.omni_ictal_split_csv}
+  final_split_csv: ${paths.omni_final_split_csv}
+  anatomical_mapping_csv: ${paths.omni_anatomical_mapping_csv}
+  hfo_dirname: omni_ieeg_hfo
+  # Upstream extract_random_samples(..., max_samples=5) for the train/val windows.
+  train_window_sampling: upstream_random
+  train_windows_per_recording: 5
+  train_seconds_per_recording: null
+  val_fraction: 0.2                     # subject-disjoint val carved from the train patients
