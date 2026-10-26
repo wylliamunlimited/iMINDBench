@@ -1,8 +1,8 @@
 """Omni-iEEG scoring of one single-channel run (``dataset=omni_ieeg_single_channel``).
 
 Reads the run's ``test_predictions.csv`` (written with
-``runtime.save_test_predictions=true`` and ``runtime.save_test_prediction_details=true``;
-one row per test (recording, channel, window)) and scores it with literal ports
+``runtime.save_test_predictions=true``; one row per test (recording, channel,
+window)) and scores it with literal ports
 of the official Omni-iEEG evaluation scripts
 (https://github.com/Omni-iEEG/Omni-iEEG; each function names its source lines):
 
@@ -105,22 +105,30 @@ def _class_ids(pred: pd.DataFrame, prefix: str) -> list[int]:
     return sorted(ids)
 
 
-def load_predictions(cell_dir: Path) -> pd.DataFrame:
+def find_predictions_csv(cell_dir: Path) -> Path:
+    """The one ``test_predictions*.csv`` of a finished cell (one pooled fold)."""
     csvs = sorted(Path(cell_dir).glob("test_predictions*.csv"))
     if not csvs:
         raise FileNotFoundError(f"no test_predictions*.csv in {cell_dir}")
     if len(csvs) > 1:
         raise ValueError(f"expected one test_predictions csv (one fold), got {csvs}")
-    pred = pd.read_csv(csvs[0], keep_default_na=False, na_values=[""])
+    return csvs[0]
+
+
+def load_predictions(cell_dir: Path) -> pd.DataFrame:
+    csv_path = find_predictions_csv(cell_dir)
+    pred = pd.read_csv(csv_path, keep_default_na=False, na_values=[""])
     required = {"recording_id", "window_start_sec", "y_true", "channel_name"}
     missing = required.difference(pred.columns)
     if missing:
         raise ValueError(
-            f"{csvs[0]} lacks {sorted(missing)}; run with "
-            "runtime.save_test_prediction_details=true."
+            f"{csv_path} lacks {sorted(missing)}; run with "
+            "runtime.save_test_predictions=true."
         )
     if pred["channel_name"].astype(str).str.contains(r"\|").any():
-        raise ValueError(f"{csvs[0]} is not single-channel (multi-channel rows found).")
+        raise ValueError(
+            f"{csv_path} is not single-channel (multi-channel rows found)."
+        )
     pred["recording_id"] = pred["recording_id"].astype(str)
     pred["channel_name"] = pred["channel_name"].astype(str)
     return pred

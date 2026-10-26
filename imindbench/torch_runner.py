@@ -17,7 +17,8 @@ from torch.utils.data import DataLoader
 
 from imindbench.base_runner import BaseRunner
 from imindbench.utils import regression as regression_utils
-from imindbench.utils.logging_utils import log
+from imindbench.utils.logging_utils import log, resolve_run_output_dir
+from imindbench.utils.pipeline_contracts import runner_ignore_label
 
 
 class TorchRunner(BaseRunner):
@@ -27,23 +28,13 @@ class TorchRunner(BaseRunner):
         super().__init__(cfg)
         self.deterministic = self._configure_determinism()
         self.device = self._get_device(cfg)
+        # Label kept for its predictions only (runner.ignore_label, default None).
+        self.ignore_label = runner_ignore_label(cfg)
         self.wandb_run = None  # Will be set via set_wandb_run() if wandb is enabled
 
     def set_wandb_run(self, wandb_run):
         """Set wandb run object for logging."""
         self.wandb_run = wandb_run
-
-    def _ignore_label(self):
-        """Optional label excluded from training classes and metrics.
-
-        ``runner.ignore_label`` (default ``None``) marks samples that are only
-        kept for their predictions, e.g. unlabelled Omni-iEEG SOZ test channels.
-        """
-        runner_cfg = self.cfg.get("runner", None) if hasattr(self.cfg, "get") else None
-        if runner_cfg is None or not hasattr(runner_cfg, "get"):
-            return None
-        value = runner_cfg.get("ignore_label", None)
-        return None if value is None else int(value)
 
     def _configure_determinism(self):
         """Configure PyTorch deterministic settings based on config."""
@@ -210,9 +201,8 @@ class TorchRunner(BaseRunner):
             class_to_index=class_to_index,
             criterion=None,
         )
-        runtime_cfg = self.cfg.get("runtime", {})
         prediction_rows = (
-            [] if runtime_cfg.get("save_test_predictions", False) else None
+            [] if self.cfg.get("runtime", {}).get("save_test_predictions") else None
         )
         test_acc, test_auc, _, _ = self._evaluate_loader(
             model,
@@ -224,12 +214,7 @@ class TorchRunner(BaseRunner):
             prediction_rows=prediction_rows,
         )
         if prediction_rows is not None:
-            self._save_test_predictions(
-                prediction_rows,
-                classes,
-                fold_idx,
-                details=bool(runtime_cfg.get("save_test_prediction_details", False)),
-            )
+            self._save_test_predictions(prediction_rows, classes, fold_idx)
 
         if self.wandb_run is not None and fold_idx is not None:
             self.wandb_run.log(
@@ -255,72 +240,64 @@ class TorchRunner(BaseRunner):
         }
 
     @staticmethod
-    def _save_test_predictions(prediction_rows, classes, fold_idx, details=False):
+    def _save_test_predictions(prediction_rows, classes, fold_idx):
         """Write per-window test predictions next to the result JSON (opt-in).
 
-        With ``details`` (``runtime.save_test_prediction_details``) each row also
-        carries the sample's channel ids/names and the raw class logits, which the
-        Omni-iEEG single-channel scorer needs.
+        One row per test sample: recording id, window times, label, class
+        probabilities, channel ids/names and the raw class logits (the
+        Omni-iEEG single-channel scorer needs the last three).
         """
-        import csv
+        import pandas as pd
 
-        from hydra.core.hydra_config import HydraConfig
-
-        out_dir = (
-            HydraConfig.get().runtime.output_dir
-            if HydraConfig.initialized()
-            else os.getcwd()
-        )
+        out_dir = resolve_run_output_dir() or os.getcwd()
         suffix = "" if fold_idx in (None, 0) else f"_fold{fold_idx}"
         path = os.path.join(out_dir, f"test_predictions{suffix}.csv")
         class_list = np.asarray(classes).tolist()
-        prob_cols = [f"prob_class_{c}" for c in class_list]
-        detail_cols = (
-            ["channel_id", "channel_name", *[f"logit_class_{c}" for c in class_list]]
-            if details
-            else []
-        )
-        with open(path, "w", newline="") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(
+
+        def column(key, dtype=None):
+            return np.concatenate(
                 [
-                    "recording_id",
-                    "window_start_sec",
-                    "window_end_sec",
-                    "y_true",
-                    *prob_cols,
-                    *detail_cols,
+                    np.asarray(row[key], dtype=dtype).reshape(-1)
+                    for row in prediction_rows
                 ]
             )
-            for row in prediction_rows:
-                recs, starts, ends, ys, probs = row[:5]
-                extra = row[5] if len(row) > 5 else None
-                for i in range(len(recs)):
-                    values = [
-                        recs[i],
-                        f"{float(starts[i]):.6f}",
-                        f"{float(ends[i]):.6f}",
-                        int(ys[i]),
-                        *[f"{float(p):.8f}" for p in probs[i]],
-                    ]
-                    if details:
-                        channel_ids = extra["channel_ids"][i]
-                        names = extra["channel_names"]
-                        channel_names = [] if names is None else names[i]
-                        values.extend(
-                            [
-                                "|".join(str(c) for c in channel_ids),
-                                "|".join(str(n) for n in channel_names),
-                                *[f"{float(v):.8f}" for v in extra["logits"][i]],
-                            ]
-                        )
-                    writer.writerow(values)
+
+        probs = np.concatenate([row["probs"] for row in prediction_rows])
+        logits = np.concatenate([row["logits"] for row in prediction_rows])
+        table = {
+            "recording_id": column("recording_ids", dtype=object),
+            "window_start_sec": column("window_start_sec", dtype=np.float64),
+            "window_end_sec": column("window_end_sec", dtype=np.float64),
+            "y_true": column("y_true").astype(np.int64),
+            **{f"prob_class_{c}": probs[:, i] for i, c in enumerate(class_list)},
+            "channel_id": [
+                "|".join(str(c) for c in ids)
+                for row in prediction_rows
+                for ids in row["channel_ids"]
+            ],
+            "channel_name": [
+                "|".join(str(n) for n in names)
+                for row in prediction_rows
+                for names in row["channel_names"]
+            ],
+            **{f"logit_class_{c}": logits[:, i] for i, c in enumerate(class_list)},
+        }
+        pd.DataFrame(table).to_csv(path, index=False, float_format="%.8f")
         log(f"Saved test predictions to {path}", priority=0)
 
     def _infer_classes_from_loader(self, loader: DataLoader) -> np.ndarray:
-        """Infer sorted unique class ids from DataLoader batches."""
+        """Infer sorted unique class ids from the loader's dataset or its batches."""
+        ignore_label = self.ignore_label
+        sample_labels = getattr(getattr(loader, "dataset", None), "sample_labels", None)
+        if callable(sample_labels):
+            # Datasets that know their labels up front are not iterated.
+            classes = np.unique(np.asarray(sample_labels(), dtype=np.int64))
+            if ignore_label is not None:
+                classes = classes[classes != ignore_label]
+            if classes.size == 0:
+                raise ValueError("Training loader is empty; cannot infer classes.")
+            return classes
         labels: set[int] = set()
-        ignore_label = self._ignore_label()
         for raw_batch in loader:
             if not isinstance(raw_batch, dict) or "y" not in raw_batch:
                 raise ValueError(
@@ -372,7 +349,7 @@ class TorchRunner(BaseRunner):
         if not class_to_index:
             raise ValueError(f"{context}: class_to_index must be non-empty.")
 
-        ignore_label = self._ignore_label()
+        ignore_label = self.ignore_label
         ignored = None
         if ignore_label is not None and ignore_label not in class_to_index:
             ignored = target == ignore_label
@@ -830,18 +807,16 @@ class TorchRunner(BaseRunner):
     ):
         """Evaluate a model on a split DataLoader.
 
-        When ``prediction_rows`` is a list, per-window predictions (recording id,
-        window times, label, class probabilities) are appended to it.
+        When ``prediction_rows`` is a list, one entry per batch (recording ids,
+        window times, labels, class probabilities, channel ids/names, logits)
+        is appended to it for ``_save_test_predictions``.
         """
         model.model.eval()
         all_probs = []
         all_targets = []
         running_loss = 0.0
         n_samples = 0
-        details = bool(
-            self.cfg.get("runtime", {}).get("save_test_prediction_details", False)
-        )
-        ignore_label = self._ignore_label()
+        ignore_label = self.ignore_label
 
         with torch.no_grad():
             for raw_batch in loader:
@@ -868,22 +843,22 @@ class TorchRunner(BaseRunner):
                 all_probs.append(probs.cpu().numpy())
                 all_targets.append(batch_y.cpu().numpy())
                 if prediction_rows is not None:
-                    row = (
-                        list(raw_batch["recording_ids"]),
-                        list(raw_batch["window_start_sec"]),
-                        list(raw_batch["window_end_sec"]),
-                        batch_y.cpu().numpy(),
-                        probs.cpu().numpy(),
+                    channel_ids = list(raw_batch["channel_ids"])
+                    prediction_rows.append(
+                        {
+                            "recording_ids": list(raw_batch["recording_ids"]),
+                            "window_start_sec": list(raw_batch["window_start_sec"]),
+                            "window_end_sec": list(raw_batch["window_end_sec"]),
+                            "y_true": batch_y.cpu().numpy(),
+                            "probs": probs.cpu().numpy(),
+                            "channel_ids": channel_ids,
+                            "channel_names": list(
+                                raw_batch.get("channel_names")
+                                or [[]] * len(channel_ids)
+                            ),
+                            "logits": outputs.detach().float().cpu().numpy(),
+                        }
                     )
-                    if details:
-                        row = row + (
-                            {
-                                "channel_ids": list(raw_batch["channel_ids"]),
-                                "channel_names": raw_batch.get("channel_names"),
-                                "logits": outputs.detach().float().cpu().numpy(),
-                            },
-                        )
-                    prediction_rows.append(row)
 
                 if criterion is not None and not (
                     ignore_label is not None

@@ -90,7 +90,6 @@ def test_expansion_yields_one_sample_per_labelled_channel():
     assert sample["channel_names"] == ["A0"]
     assert sample["channel_indices"].tolist() == [0]
     assert sample["channel_coords"].shape == (1, 3)
-    assert sample["single_channel_sample"] is True
     # The second sample of the first window is the channel labelled 0.
     assert view[1]["y"] == 0
     np.testing.assert_array_equal(view[1]["x"][0], base[0]["x"][2])
@@ -136,9 +135,11 @@ def test_only_single_channel_providers_are_expanded():
     assert len(expanded["test"]) == 3
 
 
-def test_collate_passes_channel_names_only_for_single_channel_samples():
+def test_collate_passes_channel_names_when_every_sample_has_them():
     plain = [_window("rec", 2, split="train", sample_idx=i) for i in range(2)]
-    assert "channel_names" not in variable_channel_collate(plain)
+    assert variable_channel_collate(plain)["channel_names"] == [["A0", "A1"]] * 2
+    nameless = [dict(sample, channel_names=None) for sample in plain]
+    assert "channel_names" not in variable_channel_collate(nameless)
 
     view = SingleChannelSplitDataset(
         _MaterializedSplit(plain, split="train"), provider=_Provider({"rec": [0, 1]})

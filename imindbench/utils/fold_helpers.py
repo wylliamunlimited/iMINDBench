@@ -25,6 +25,7 @@ from imindbench.utils.logging_utils import (
     log,
     log_fold_metrics,
 )
+from imindbench.utils.pipeline_contracts import runner_ignore_label
 
 
 def _normalize_preprocess_torch_num_threads(value) -> int | None:
@@ -206,23 +207,9 @@ def _find_unseen_eval_classes(
     )
 
 
-def _runner_ignore_label(cfg):
-    """``runner.ignore_label`` (default ``None``)."""
-    runner_cfg = cfg.get("runner", None) if hasattr(cfg, "get") else None
-    if runner_cfg is None or not hasattr(runner_cfg, "get"):
-        return None
-    value = runner_cfg.get("ignore_label", None)
-    return None if value is None else int(value)
-
-
-def collect_class_counts_from_loader(loader, ignore_label=None) -> dict[int, int]:
-    """Collect class-id counts from a split loader/dataset.
-
-    Samples labelled ``ignore_label`` (channels kept only for their
-    predictions) are not counted as a class.
-    """
-    samples = loader.dataset if isinstance(loader, DataLoader) else loader
-    class_counts: dict[int, int] = {}
+def _iter_sample_labels(samples) -> np.ndarray:
+    """Integer labels of dict samples/batches, validated one value at a time."""
+    labels: list[int] = []
     for raw_batch in samples:
         if not isinstance(raw_batch, dict) or "y" not in raw_batch:
             raise ValueError(
@@ -241,11 +228,29 @@ def collect_class_counts_from_loader(loader, ignore_label=None) -> dict[int, int
                 raise TypeError(
                     f"Class labels must be integers, got {type(value).__name__}."
                 )
-            label = int(value)
-            if ignore_label is not None and label == ignore_label:
-                continue
-            class_counts[label] = int(class_counts.get(label, 0) + 1)
-    return _sorted_class_counts(class_counts)
+            labels.append(int(value))
+    return np.asarray(labels, dtype=np.int64)
+
+
+def collect_class_counts_from_loader(loader, ignore_label=None) -> dict[int, int]:
+    """Collect class-id counts from a split loader/dataset.
+
+    Samples labelled ``ignore_label`` (channels kept only for their
+    predictions) are not counted as a class. Datasets that know their labels
+    up front (``sample_labels()``) are not iterated.
+    """
+    samples = loader.dataset if isinstance(loader, DataLoader) else loader
+    sample_labels = getattr(samples, "sample_labels", None)
+    if callable(sample_labels):
+        labels = np.asarray(sample_labels(), dtype=np.int64).reshape(-1)
+    else:
+        labels = _iter_sample_labels(samples)
+    if ignore_label is not None:
+        labels = labels[labels != ignore_label]
+    values, counts = np.unique(labels, return_counts=True)
+    return _sorted_class_counts(
+        {int(v): int(c) for v, c in zip(values, counts, strict=True)}
+    )
 
 
 def build_skipped_fold_result(
@@ -306,17 +311,11 @@ def build_balanced_train_sampler(dataset, *, generator=None, ignore_label=None):
     valid = np.ones(labels.shape, dtype=bool)
     if ignore_label is not None:
         valid = labels != ignore_label
-    classes, counts = np.unique(labels[valid], return_counts=True)
-    class_weight = {
-        int(c): 1.0 / float(n) for c, n in zip(classes, counts, strict=True)
-    }
-    weights = np.asarray(
-        [
-            class_weight.get(int(label), 0.0) if ok else 0.0
-            for label, ok in zip(labels, valid, strict=True)
-        ],
-        dtype=np.float64,
+    _, inverse, counts = np.unique(
+        labels[valid], return_inverse=True, return_counts=True
     )
+    weights = np.zeros(labels.shape, dtype=np.float64)
+    weights[valid] = 1.0 / counts[inverse.reshape(-1)]
     return WeightedRandomSampler(
         weights=torch.as_tensor(weights, dtype=torch.double),
         num_samples=int(labels.size),
@@ -371,7 +370,7 @@ def build_torch_split_loaders(
         train_sampler = build_balanced_train_sampler(
             fold["train_split"],
             generator=train_generator,
-            ignore_label=_runner_ignore_label(cfg),
+            ignore_label=runner_ignore_label(cfg),
         )
 
     train_loader = DataLoader(
@@ -606,7 +605,7 @@ def evaluate_variable_fold(
             runner=runner,
             loaders=(train_loader, val_loader, test_loader),
         )
-    ignore_label = _runner_ignore_label(cfg)
+    ignore_label = runner_ignore_label(cfg)
     train_class_counts = collect_class_counts_from_loader(train_loader, ignore_label)
     val_class_counts = collect_class_counts_from_loader(val_loader, ignore_label)
     test_class_counts = collect_class_counts_from_loader(test_loader, ignore_label)

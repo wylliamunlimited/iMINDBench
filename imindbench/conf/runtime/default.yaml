@@ -13,13 +13,10 @@ runtime:
   preprocessed_split_cache_enabled: false
   preprocessed_split_cache_dir: ${paths.preprocessed_split_cache_dir}
   preprocessed_split_cache_mode: read_write
-  # Opt-in: write the per-window test predictions of every fold to
-  # test_predictions[_fold<k>].csv in the run directory. The Omni-iEEG scorers
-  # read that file; off by default.
+  # Opt-in: write the per-window test predictions of every fold (label, class
+  # probabilities, channel ids/names, raw logits) to test_predictions[_fold<k>].csv
+  # in the run directory. The Omni-iEEG scorers read that file; off by default.
   save_test_predictions: false
-  # Opt-in: add the channel ids/names and the raw class logits to that file
-  # (needed by the Omni-iEEG single-channel scorer).
-  save_test_prediction_details: false
 
 runner:
   num_workers: 4

@@ -91,7 +91,6 @@ def test_default_block_runs_one_pooled_cell_per_task(tmp_path, dataset_script, m
         assert fields["model"] == model
         assert fields["preprocessor"] == PRESET[task]
         assert fields["runtime.save_test_predictions"] == "true"
-        assert fields["runtime.save_test_prediction_details"] == "true"
         assert fields["runner.train_sampler"] == "balanced"
         run_dir = Path(fields["hydra.run.dir"]).relative_to(tmp_path / "runs")
         assert run_dir.parts == (

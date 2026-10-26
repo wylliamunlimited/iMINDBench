@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -232,6 +233,18 @@ def is_multi_subject(provider: str, regime: str) -> bool:
     return _get_provider_spec(provider)["regime_is_multi_subject"][regime]
 
 
+def provider_options(dataset_cfg: Any) -> dict[str, Any]:
+    """``dataset.provider_options`` as a plain dict (empty when unset).
+
+    Dataset-specific settings (Omni-iEEG window length, split tables, ...)
+    travel here and are forwarded to the dataset class as keyword arguments.
+    """
+    options = _cfg_like_get(dataset_cfg, "provider_options", None)
+    if isinstance(options, DictConfig):
+        options = OmegaConf.to_container(options, resolve=True)
+    return dict(options) if isinstance(options, Mapping) else {}
+
+
 def dataset_single_channel(dataset_cfg: Any) -> bool:
     """Whether the dataset uses the single-channel protocol.
 
@@ -239,11 +252,19 @@ def dataset_single_channel(dataset_cfg: Any) -> bool:
     window into one sample per channel, so every sample has exactly one
     channel whatever the subject.
     """
-    getter = getattr(dataset_cfg, "get", None)
-    options = getter("provider_options", None) if callable(getter) else None
-    if options is None or not hasattr(options, "get"):
-        return False
-    return bool(options.get("single_channel", False))
+    return bool(provider_options(dataset_cfg).get("single_channel", False))
+
+
+def runner_ignore_label(cfg: Any) -> int | None:
+    """``runner.ignore_label`` (default ``None``).
+
+    Samples with this label are kept for their predictions but excluded from
+    the trained classes, the class counts and the metrics (e.g. unlabelled
+    Omni-iEEG SOZ test channels).
+    """
+    runner_cfg = _cfg_like_get(cfg, "runner", None)
+    value = None if runner_cfg is None else _cfg_like_get(runner_cfg, "ignore_label")
+    return None if value is None else int(value)
 
 
 def needs_region_intersection_pool(
@@ -372,20 +393,11 @@ def build_processed_split_provider(
     """Instantiate one split provider object via dataset.provider."""
     dataset_cls = get_dataset_class(dataset_provider)
 
-    # Dataset-specific settings (Omni-iEEG window length, split tables, ...)
-    # travel in dataset.provider_options and are forwarded as keyword
-    # arguments. Datasets without the key are constructed exactly as before.
-    provider_options = dataset_cfg.get("provider_options", None)
-    extra_kwargs = (
-        OmegaConf.to_container(provider_options, resolve=True)
-        if isinstance(provider_options, DictConfig)
-        else dict(provider_options or {})
-    )
-
     # Constructor kwargs are intentionally mirrored from dataset_cfg so this
-    # helper stays a thin adapter over dataset-class APIs.
+    # helper stays a thin adapter over dataset-class APIs. Datasets without
+    # provider_options are constructed exactly as before.
     return dataset_cls(
-        **extra_kwargs,
+        **provider_options(dataset_cfg),
         root=dataset_cfg.root,
         dirname=dataset_cfg.dirname,
         subset_tier=dataset_cfg.subset_tier,

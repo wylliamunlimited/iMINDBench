@@ -134,7 +134,6 @@ for TASK in "${TASKS[@]}"; do
     --experiment "$EXPERIMENT" \
     $(omni_task_settings "$TASK") \
     --set runtime.save_test_predictions=true \
-    --set runtime.save_test_prediction_details=true \
     --set runner.train_sampler=balanced \
     --output-group single_channel
 done

@@ -26,13 +26,18 @@ from omegaconf import OmegaConf
 
 from imindbench.preprocessors import build_preprocessor, describe_preprocessor
 from imindbench.utils import regression as regression_utils
-from imindbench.utils.logging_utils import log, log_fold_split_sample_counts
+from imindbench.utils.logging_utils import (
+    int_or_str,
+    log,
+    log_fold_split_sample_counts,
+)
 from imindbench.utils.pipeline_contracts import (
     AUTO_MAX_TRAIN_SAMPLES_PER_SUBJECT,
     build_processed_split_provider,
     dataset_single_channel,
     get_dataset_class,
     needs_region_intersection_pool,
+    provider_options,
     resolve_train_source_configs,
     validate_decodable_train_source_regimes,
 )
@@ -464,8 +469,8 @@ def _build_train_source_cache_identity(
         "coordinate_profile": str(
             source_cfg.get("coordinate_profile", source_dataset.coordinate_profile)
         ),
-        "test_subject": _int_or_str(source_cfg["test_subject"]),
-        "test_session": _int_or_str(source_cfg["test_session"]),
+        "test_subject": int_or_str(source_cfg["test_subject"]),
+        "test_session": int_or_str(source_cfg["test_session"]),
         "split": str(split_summary["split"]),
         "fold_idx": int(fold_idx),
         "recording_ids": list(split_summary["recording_ids"]),
@@ -543,8 +548,8 @@ def _build_preprocessed_split_cache_identity(
         ),
         # Numeric ids stay ints so existing providers keep their cache identity;
         # Omni-iEEG ids such as "sub-hupHUP064" or the pooled "all" stay strings.
-        "test_subject": _int_or_str(dataset_cfg.test_subject),
-        "test_session": _int_or_str(dataset_cfg.test_session),
+        "test_subject": int_or_str(dataset_cfg.test_subject),
+        "test_session": int_or_str(dataset_cfg.test_session),
         "provider_options": _provider_options_identity(dataset_cfg),
         "fold_idx": int(fold_idx),
         "uniquify_channel_ids_with_subject": bool(
@@ -577,13 +582,6 @@ def _build_preprocessed_split_cache_identity(
             for split in ("train", "val", "test")
         },
     }
-    if str(dataset_cfg.provider) == "omni_ieeg":
-        # Omni windows carry exactly round(duration * rate) samples
-        # (_exact_omni_window). Entries cached before that hold mixed
-        # 30000/30001-sample windows that variable_channel_collate rejects, so
-        # they must not be reused. Keyed on this provider alone, so every other
-        # provider's entries keep their identity.
-        identity["omni_window_length"] = "exact_nominal_v1"
     return identity
 
 
@@ -846,22 +844,10 @@ def _dataset_cfg_get(dataset_cfg: Any, key: str, default: Any) -> Any:
     return getattr(dataset_cfg, key, default)
 
 
-def _int_or_str(value: Any) -> int | str:
-    """``int(value)`` for numeric ids, else the id as a string (Omni-iEEG)."""
-    text = str(value).strip()
-    if text.lstrip("-").isdigit():
-        return int(text)
-    return text
-
-
 def _provider_options_identity(dataset_cfg: Any) -> dict[str, Any] | None:
     """Plain, key-sorted copy of dataset.provider_options for cache identities."""
-    options = _dataset_cfg_get(dataset_cfg, "provider_options", None)
-    if not options:
-        return None
-    if not isinstance(options, dict):
-        options = OmegaConf.to_container(options, resolve=True)
-    return {str(key): options[key] for key in sorted(options)}
+    options = provider_options(dataset_cfg)
+    return {str(key): options[key] for key in sorted(options)} or None
 
 
 def _normalize_decodable_subject_sessions_only(value: Any) -> bool:
@@ -2754,46 +2740,6 @@ class WindowedNeuroprobeSplitDataset(torch.utils.data.Dataset):
         self._channel_cache[recording_id] = meta
         return meta
 
-    @staticmethod
-    def _exact_omni_window(rec, recording_id, start, end, window, window_data):
-        """Give an Omni-iEEG window exactly round(duration * rate) samples.
-
-        The upstream extractors take a fixed sample COUNT from an integer index
-        (``usable_data[i : i + int(duration * rate)]``, e.g. Omni-iEEG's
-        extract_random_samples), but the provider hands windows over as float
-        [start, end) intervals and RegularTimeSeries.slice resolves those as
-        ``ceil((start - t0) * rate)`` .. ``floor((end - t0) * rate)``. Whenever start
-        does not land exactly on the sample grid, that pair of roundings drops one
-        sample (8 % of the ictal_interictal train windows), and a window running past
-        the recording domain gets one too many (slice clamps the end to len + 1).
-        Batches then mix 30000- and 30001-sample windows and variable_channel_collate
-        refuses them.
-
-        Re-slicing with a short right margin keeps slice's own start index -- so the
-        window still begins at the first sample at or after ``start``, as upstream does
-        -- and taking the first ``n_nominal`` samples reproduces the upstream count
-        exactly. Nothing is ever padded: a window that cannot be filled from real
-        samples is an error, not a guess.
-        """
-        rate = float(window.seeg_data.sampling_rate)
-        n_nominal = int(round((end - start) * rate))
-        if window_data.shape[0] == n_nominal:
-            return window_data
-        if window_data.shape[0] < n_nominal:
-            # Ask for a few samples more on the right; the left edge is unchanged.
-            margin = 4.0 / rate
-            widened = np.asarray(rec.slice(start, end + margin).seeg_data.data)
-            if widened.shape[0] < n_nominal:
-                raise ValueError(
-                    f"Omni-iEEG window [{start}, {end}) of recording "
-                    f"{recording_id!r} holds only {widened.shape[0]} samples at "
-                    f"{rate} Hz, fewer than the {n_nominal} its duration requires, "
-                    "even after extending the right edge. The recording ends inside "
-                    "the window."
-                )
-            window_data = widened
-        return window_data[:n_nominal]
-
     def _build_raw_sample(self, idx: int) -> dict[str, Any]:
         recording_id, interval_idx = self._flat_index[idx]
         interval = self._interval_map[recording_id]
@@ -2804,14 +2750,12 @@ class WindowedNeuroprobeSplitDataset(torch.utils.data.Dataset):
 
         rec = self._get_recording(recording_id)
         meta = self._get_channel_meta(recording_id)
-        window_data = read_recording_window(rec, start, end, self.window_slicing_policy)
+        window_data = read_recording_window(
+            rec, start, end, self.window_slicing_policy, recording_id=recording_id
+        )
         if window_data.ndim != 2:
             raise ValueError(
                 f"Expected window seeg_data.data to be 2D, got shape {window_data.shape}."
-            )
-        if self._dataset_provider == "omni_ieeg":
-            window_data = self._exact_omni_window(
-                rec, recording_id, start, end, rec.slice(start, end), window_data
             )
         # Assumes seeg_data.data is (time, all_channels).  Transpose after
         # channel selection gives (selected_channels, time) = (channels, *feature_shape).
@@ -2988,7 +2932,6 @@ class SingleChannelSplitDataset(torch.utils.data.Dataset):
             raise ValueError("SingleChannelSplitDataset requires a materialized split.")
         self.base = base
         self.provider = provider
-        self.split = getattr(base, "split", None)
         self.keep_unlabeled = bool(keep_unlabeled)
         base_positions: list[int] = []
         channel_positions: list[int] = []
@@ -3073,7 +3016,6 @@ class SingleChannelSplitDataset(torch.utils.data.Dataset):
                 out[key] = self._take(sample[key], pos)
         out["sample_idx"] = int(idx)
         out["base_sample_idx"] = base_idx
-        out["single_channel_sample"] = True
         return out
 
     def is_materialized(self) -> bool:

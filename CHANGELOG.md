@@ -35,10 +35,11 @@ Notable changes and upgrade actions are recorded here.
   arguments for providers that accept them; the single-channel protocol
   (`provider_options.single_channel`), which expands preprocessed windows into
   one sample per channel and skips region-intersection pooling;
-  `runner.ignore_label`, `runner.train_sampler: balanced`,
-  `runtime.save_test_predictions` and `runtime.save_test_prediction_details`
-  (per-window test predictions, optionally with channel names and logits);
-  the `omni_*` preprocessor presets and the coordinate profile `omni_none`.
+  `runner.ignore_label`, `runner.train_sampler: balanced` and
+  `runtime.save_test_predictions` (per-window test predictions with channel
+  names and logits); `dataset.window_slicing_policy: exact_count` (exactly
+  `round(duration * rate)` samples per window); the `omni_*` preprocessor
+  presets and the coordinate profile `omni_none`.
 
 ### Upgrade notes
 

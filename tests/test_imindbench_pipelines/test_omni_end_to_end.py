@@ -103,7 +103,6 @@ def test_torch_run_saves_scorable_test_predictions(run):
         "++model.selection_metric=roc_auc",
         "runner.train_sampler=balanced",
         "runtime.save_test_predictions=true",
-        "runtime.save_test_prediction_details=true",
     )
     assert _fold(result)["test_roc_auc"] > 0.9
     with open(run_dir / "test_predictions.csv") as handle:
@@ -129,7 +128,6 @@ def test_soz_run_keeps_unlabelled_test_channels(run, tmp_path):
         "runner.ignore_label=-1",
         "runner.train_sampler=balanced",
         "runtime.save_test_predictions=true",
-        "runtime.save_test_prediction_details=true",
         task="soz_outcome",
     )
     fold = _fold(result)
@@ -202,7 +200,6 @@ def test_hfo_run_scores_events(run):
         "dataset.label_mode=multiclass",
         "dataset.provider_options.edge_trim_sec=0",
         "runtime.save_test_predictions=true",
-        "runtime.save_test_prediction_details=true",
         task="hfo",
         window_sec=2,
         windows=12,

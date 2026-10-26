@@ -4,8 +4,8 @@ Adapted from torch_brain's neuroprobe_eval tests of the Omni-iEEG harness.
 
 ``runner.ignore_label`` keeps samples for their predictions while excluding them
 from the trained classes and the metrics (unlabelled SOZ test channels), and
-``runtime.save_test_prediction_details`` adds the columns the single-channel
-scorer needs. Both default to off, so other suites are unaffected.
+``runtime.save_test_predictions`` writes the columns the single-channel scorer
+needs. Both default to off, so other suites are unaffected.
 """
 
 import csv
@@ -49,14 +49,13 @@ def _sample(label, split, sample_idx, *, single_channel=False):
     }
     if single_channel:
         sample["channel_names"] = ["A0"]
-        sample["single_channel_sample"] = True
     return sample
 
 
 MODEL_CONF = Path(__file__).resolve().parents[2] / "imindbench/conf/model/mlp.yaml"
 
 
-def _cfg(tmp_path, *, ignore_label=None, details=False):
+def _cfg(tmp_path, *, ignore_label=None):
     model = OmegaConf.load(MODEL_CONF)
     model.update({"device": "cpu", "max_iter": 1, "patience": 1, "batch_size": 2})
     return OmegaConf.create(
@@ -68,7 +67,6 @@ def _cfg(tmp_path, *, ignore_label=None, details=False):
                 "seed": 0,
                 "deterministic": False,
                 "save_test_predictions": True,
-                "save_test_prediction_details": details,
             },
         }
     )
@@ -119,7 +117,9 @@ def test_ignored_test_labels_do_not_break_the_fold(tmp_path, monkeypatch):
     with open(tmp_path / "test_predictions.csv") as handle:
         rows = list(csv.DictReader(handle))
     assert [int(r["y_true"]) for r in rows] == [0, 1, -1, -1]
-    assert "channel_name" not in rows[0]
+    # Multi-channel samples without names still get the (empty) column.
+    assert [r["channel_name"] for r in rows] == ["", "", "", ""]
+    assert [r["channel_id"] for r in rows] == ["c0", "c0", "c0", "c0"]
 
 
 def test_ignore_label_is_encoded_as_the_loss_ignore_index(tmp_path):
@@ -154,8 +154,8 @@ def test_metrics_ignore_the_ignored_label(tmp_path, monkeypatch):
     assert np.isnan(result["test_accuracy"])
 
 
-def test_prediction_details_add_channel_and_logit_columns(tmp_path, monkeypatch):
-    cfg = _cfg(tmp_path, ignore_label=-1, details=True)
+def test_predictions_carry_channel_and_logit_columns(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, ignore_label=-1)
     _run(
         cfg, [0, 1, -1], single_channel=True, monkeypatch=monkeypatch, tmp_path=tmp_path
     )

@@ -151,7 +151,7 @@ def test_context_window_matches_isolated_historical_patch(monkeypatch):
         assert actual[key] == expected[key]
 
 
-@pytest.mark.parametrize("policy", ["ceil", "legacy_floor"])
+@pytest.mark.parametrize("policy", ["ceil", "legacy_floor", "exact_count"])
 def test_supported_window_policies(policy):
     validate_window_slicing_policy(policy)
 

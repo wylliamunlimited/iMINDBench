@@ -166,7 +166,6 @@ def test_every_task_of_the_run_script_composes(task, model):
         f"dataset.task={task}",
         *TASK_SETTINGS[task],
         "runtime.save_test_predictions=true",
-        "runtime.save_test_prediction_details=true",
         "runner.train_sampler=balanced",
     )
     validate_eval_config(cfg)
@@ -308,7 +307,6 @@ def test_presets_build_single_channel_folds_at_500hz(
     for split in ("train", "val", "test"):
         sample = fold[f"{split}_split"][0]
         assert tuple(sample["x"].shape) == (1, expected_samples), split
-        assert sample["single_channel_sample"] is True
         assert len(sample["channel_names"]) == 1
 
 

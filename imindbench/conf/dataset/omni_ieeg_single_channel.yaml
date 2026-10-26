@@ -14,7 +14,10 @@
 root: ${paths.dataset_root}
 dirname: omni_ieeg
 provider: omni_ieeg
-window_slicing_policy: ceil  # ceil | legacy_floor
+# exact_count: every window holds exactly round(window_sec * rate) samples, the
+# fixed sample count the upstream extractors take (ceil would drop or add one
+# sample when a window start is off the sample grid).
+window_slicing_policy: exact_count  # ceil | legacy_floor | exact_count
 subset_tier: full
 label_mode: binary
 task: ictal_interictal

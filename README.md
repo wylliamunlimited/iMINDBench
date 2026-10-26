@@ -384,6 +384,10 @@ reads across all splits and training sources:
   before rounding both boundaries up.
 - `legacy_floor`: floor both boundaries without snapping, relative to the
   recording's time origin, matching the former historical diagnostic launcher.
+- `exact_count`: the `ceil` read, then exactly `round(duration * rate)` samples
+  (re-read with a short right margin when the start is off the sample grid,
+  truncated when the window runs past the recording). This is the fixed sample
+  count upstream extractors take; the Omni-iEEG datasets use it.
 
 Historical mode preserves the existing context placement and crop calculations;
 it changes waveform reads, as the former diagnostic did. It does not establish
@@ -516,10 +520,9 @@ its own way. It differs from the other scripts in four ways:
 | `anatomical` | every channel with a mapped region | 5 lobes (frontal, temporal, parietal, occipital, limbic) | 300 s | multiclass, selection by val macro-F1 | per-channel sum of the class probabilities, then macro P/R/F1, accuracy, balanced accuracy (`anatomical/evaluation.py`) |
 | `hfo` | annotated HFO events | 3 classes (artifact, real HFO, spike HFO) | 2 s | multiclass, `edge_trim_sec=0`, selection by val macro-F1 | argmax, then accuracy and macro P/R/F1 (`event_model/benchmark/benchmark.py`) |
 
-Every launch also sets `runtime.save_test_predictions=true` and
-`runtime.save_test_prediction_details=true`, which write each test
-(recording, channel, window) with its channel name, class probabilities and
-logits to `test_predictions.csv` next to the result JSON, and
+Every launch also sets `runtime.save_test_predictions=true`, which writes each
+test (recording, channel, window) with its channel name, class probabilities
+and logits to `test_predictions.csv` next to the result JSON, and
 `runner.train_sampler=balanced`, the upstream class-balanced training sampler.
 The scorer reads that file and writes `omni_sc_metrics.json`; **the
 per-channel-window AUROC in the result JSON is not an Omni-iEEG metric**,

@@ -1,26 +1,27 @@
-"""Omni-iEEG windows must carry exactly round(duration * rate) samples.
+"""The exact_count window policy: exactly round(duration * rate) samples per window.
 
-The provider hands windows over as float [start, end) intervals and
+Providers hand windows over as float [start, end) intervals and
 RegularTimeSeries.slice resolves them as ceil((start - t0) * rate) ..
 floor((end - t0) * rate). A start off the sample grid therefore loses one sample, and
 a window whose end runs past the stored domain gains one (slice clamps the end index to
 len + 1). Batches then mix 30000- and 30001-sample windows and variable_channel_collate
-refuses them, which is what killed the first single-channel runs. The upstream
-extractors take a fixed sample COUNT from an integer index, so that is what
-_exact_omni_window restores.
+refuses them, which is what killed the first Omni-iEEG single-channel runs. The
+upstream extractors take a fixed sample COUNT from an integer index, so that is what
+``dataset.window_slicing_policy: exact_count`` restores.
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from omegaconf import OmegaConf
 
-from imindbench.utils.data_adapter import WindowedNeuroprobeSplitDataset
-
-exact_window = WindowedNeuroprobeSplitDataset._exact_omni_window
+from imindbench.utils.window_slicing import read_recording_window
 
 RATE = 100.0
 N_CHANNELS = 3
+CONF = Path(__file__).resolve().parents[2] / "imindbench/conf/dataset"
 
 
 class _GridRecording:
@@ -37,6 +38,7 @@ class _GridRecording:
         )
         self._t0 = t0
         self._domain_end = t0 + n_samples / RATE if domain_end is None else domain_end
+        self.seeg_data = SimpleNamespace(data=self._data, sampling_rate=RATE)
 
     def slice(self, start, end):
         if start < self._t0:
@@ -55,17 +57,16 @@ class _GridRecording:
 
 
 def _run(rec, start, end):
-    """Call the helper the way _build_raw_sample does."""
-    window = rec.slice(start, end)
-    raw = np.asarray(window.seeg_data.data)
-    return raw, exact_window(rec, "rec-1", start, end, window, raw)
+    """The plain ceil read next to the exact_count read of the same window."""
+    raw = read_recording_window(rec, start, end, "ceil")
+    return raw, read_recording_window(rec, start, end, "exact_count")
 
 
 def test_start_on_the_grid_is_left_untouched():
     rec = _GridRecording(400)
     raw, fixed = _run(rec, 1.0, 3.0)
-    assert raw.shape[0] == 200
-    assert fixed is raw  # no re-slice, no copy
+    assert raw.shape[0] == fixed.shape[0] == 200
+    assert np.array_equal(fixed, raw)
 
 
 def test_start_off_the_grid_would_lose_one_sample():
@@ -96,8 +97,8 @@ def test_window_past_the_domain_end_is_trimmed():
 
 def test_unfillable_window_raises_instead_of_padding():
     rec = _GridRecording(150)  # 1.5 s of data for a 2 s window
-    with pytest.raises(ValueError, match="fewer than the 200"):
-        _run(rec, 0.0, 2.0)
+    with pytest.raises(ValueError, match="rec-1.*fewer than the 200"):
+        read_recording_window(rec, 0.0, 2.0, "exact_count", recording_id="rec-1")
 
 
 @pytest.mark.parametrize("window_sec", [2.0, 6.0])
@@ -108,3 +109,9 @@ def test_every_start_offset_yields_the_nominal_count(window_sec):
         start = 1.0 + float(offset)
         _, fixed = _run(rec, start, start + window_sec)
         assert fixed.shape[0] == nominal
+
+
+@pytest.mark.parametrize("name", ["omni_ieeg", "omni_ieeg_single_channel"])
+def test_the_omni_datasets_select_the_policy(name):
+    cfg = OmegaConf.load(CONF / f"{name}.yaml")
+    assert cfg.window_slicing_policy == "exact_count"

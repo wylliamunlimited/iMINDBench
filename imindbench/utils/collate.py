@@ -90,14 +90,9 @@ def variable_channel_collate(samples: list[dict[str, Any]]) -> dict[str, Any]:
         [] if all(brain_areas_present) else None
     )
 
-    # Single-channel samples (SingleChannelSplitDataset) also carry their channel
-    # name, used to label per-channel test predictions. Other batches keep the
-    # historical key set.
-    names_present = all(
-        bool(sample.get("single_channel_sample", False))
-        and sample.get("channel_names") is not None
-        for sample in samples
-    )
+    # Channel names (when every sample carries them) label per-channel test
+    # predictions; batches without them keep the historical key set.
+    names_present = all(sample.get("channel_names") is not None for sample in samples)
     channel_names: list[list[str]] | None = [] if names_present else None
     channel_ids: list[list[str]] = []
     recording_ids: list[str] = []

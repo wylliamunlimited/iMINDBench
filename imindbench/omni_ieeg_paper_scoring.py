@@ -42,6 +42,8 @@ from sklearn.metrics import (
     roc_curve,
 )
 
+from imindbench.omni_ieeg_scoring import find_predictions_csv
+
 POSITIVE_LABEL = 1  # interictal
 
 
@@ -94,13 +96,11 @@ def paper_metrics(y_true: np.ndarray, score: np.ndarray) -> dict:
 
 
 def score_cell(cell_dir: Path, unit_sec: float, edge_trim_sec: float) -> dict:
-    csvs = sorted(Path(cell_dir).glob("test_predictions*.csv"))
-    if not csvs:
-        raise FileNotFoundError(f"no test_predictions*.csv in {cell_dir}")
-    pred = pd.read_csv(csvs[0])
+    csv_path = find_predictions_csv(cell_dir)
+    pred = pd.read_csv(csv_path)
     prob_col = f"prob_class_{POSITIVE_LABEL}"
     if prob_col not in pred.columns:
-        raise ValueError(f"{csvs[0]} has no {prob_col} column")
+        raise ValueError(f"{csv_path} has no {prob_col} column")
     pred["score"] = pred[prob_col]
 
     window_sec = float((pred["window_end_sec"] - pred["window_start_sec"]).median())
@@ -109,7 +109,7 @@ def score_cell(cell_dir: Path, unit_sec: float, edge_trim_sec: float) -> dict:
     score = units["score"].to_numpy(dtype=float)
     result = {
         "protocol": "omni_ieeg_paper",
-        "predictions_file": csvs[0].name,
+        "predictions_file": csv_path.name,
         "model_window_sec": window_sec,
         "unit_sec": unit_sec,
         "edge_trim_sec": edge_trim_sec,
